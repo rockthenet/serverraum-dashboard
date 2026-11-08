@@ -1,0 +1,317 @@
+{
+  "poll_interval": 15,
+  "fping_timeout": 800,
+  "http_timeout": 3,
+  "groups": {
+    "proxmox": {
+      "label": "Proxmox / Virtualisierung",
+      "collapsed": false,
+      "devices": [
+        {
+          "name": "Proxmox Backend",
+          "ip": "192.168.178.171",
+          "http": 8006,
+          "type": "proxmox",
+          "node": "pve1"
+        },
+        {
+          "name": "Proxmox 2026 - HP",
+          "ip": "192.168.178.218",
+          "http": 8006,
+          "type": "proxmox",
+          "node": "pve2"
+        },
+        {
+          "name": "OpenMediaVault OMV",
+          "ip": "192.168.178.219",
+          "http": 80,
+          "type": "linux"
+        },
+        {
+          "name": "Zero Pi (Docker)",
+          "ip": "192.168.178.67",
+          "http": 9000,
+          "type": "linux"
+        }
+      ]
+    },
+    "network": {
+      "label": "Netzwerk / Infrastruktur",
+      "collapsed": false,
+      "devices": [
+        {
+          "name": "FRITZ!Box 6590",
+          "ip": "192.168.178.1",
+          "http": 80,
+          "type": "router"
+        },
+        {
+          "name": "AdGuard / Pi-hole",
+          "ip": "192.168.178.248",
+          "http": 80,
+          "type": "dns"
+        },
+        {
+          "name": "UniFi Network Backend",
+          "ip": "192.168.178.175",
+          "http": 8443,
+          "type": "network"
+        },
+        {
+          "name": "OpenWrt",
+          "ip": "192.168.178.164",
+          "http": 80,
+          "type": "router"
+        },
+        {
+          "name": "SLZB-06MU Thread/Matter",
+          "ip": "192.168.178.179",
+          "http": 80,
+          "type": "iot"
+        },
+        {
+          "name": "OT Border Router",
+          "ip": "192.168.178.219",
+          "port": 8082,
+          "type": "iot"
+        }
+      ]
+    },
+    "smarthome": {
+      "label": "Smart Home / Automation",
+      "collapsed": false,
+      "devices": [
+        {
+          "name": "IoBroker",
+          "ip": "192.168.178.243",
+          "http": 8081,
+          "type": "automation"
+        },
+        {
+          "name": "HomeMatic CCU3",
+          "ip": "192.168.178.6",
+          "http": 80,
+          "type": "automation"
+        },
+        {
+          "name": "Phoscon (Conbee II)",
+          "ip": "192.168.178.247",
+          "http": 80,
+          "type": "zigbee"
+        },
+        {
+          "name": "Shelly Klingel",
+          "ip": "192.168.178.162",
+          "http": 80,
+          "type": "shelly"
+        },
+        {
+          "name": "Tasmota Stromzaehler",
+          "ip": "192.168.178.241",
+          "http": 80,
+          "type": "tasmota"
+        },
+        {
+          "name": "Tasmota CCU3 Switch",
+          "ip": "192.168.178.28",
+          "http": 80,
+          "type": "tasmota"
+        },
+        {
+          "name": "Tasmota 3",
+          "ip": "192.168.178.2",
+          "http": 80,
+          "type": "tasmota"
+        },
+        {
+          "name": "TeddyCloud",
+          "ip": "192.168.178.202",
+          "http": 80,
+          "type": "iot"
+        }
+      ]
+    },
+    "media": {
+      "label": "Media",
+      "collapsed": false,
+      "devices": [
+        {
+          "name": "TvHeadend",
+          "ip": "192.168.178.14",
+          "http": 9981,
+          "type": "tv"
+        },
+        {
+          "name": "Jellyfin",
+          "ip": "192.168.178.230",
+          "http": 8096,
+          "type": "media"
+        },
+        {
+          "name": "Kodi Kueche",
+          "ip": "192.168.178.26",
+          "http": 8080,
+          "type": "kodi"
+        },
+        {
+          "name": "Kodi Bad",
+          "ip": "192.168.178.64",
+          "http": 8080,
+          "type": "kodi"
+        },
+        {
+          "name": "Kodi Schlafzimmer",
+          "ip": "192.168.178.141",
+          "http": 8080,
+          "type": "kodi"
+        },
+        {
+          "name": "Kodi Wohnzimmer",
+          "ip": "192.168.178.15",
+          "http": 8080,
+          "type": "kodi"
+        },
+        {
+          "name": "meTube",
+          "ip": "192.168.178.219",
+          "port": 8084,
+          "type": "media"
+        }
+      ]
+    },
+    "cams": {
+      "label": "Kameras",
+      "collapsed": false,
+      "devices": [
+        {
+          "name": "Garten Webcam",
+          "ip": "192.168.178.125",
+          "type": "cam"
+        },
+        {
+          "name": "Garten 2 Webcam",
+          "ip": "192.168.178.163",
+          "type": "cam"
+        },
+        {
+          "name": "Haustuer Webcam",
+          "ip": "192.168.178.17",
+          "type": "cam"
+        },
+        {
+          "name": "ANNKE Carport",
+          "ip": "192.168.178.106",
+          "type": "cam"
+        },
+        {
+          "name": "Yi Cam Schuppen",
+          "ip": "192.168.178.57",
+          "type": "cam"
+        },
+        {
+          "name": "Yi Cam Innen",
+          "ip": "192.168.178.111",
+          "type": "cam"
+        }
+      ]
+    },
+    "monitoring": {
+      "label": "Monitoring",
+      "collapsed": false,
+      "devices": [
+        {
+          "name": "Gatus Zero Pi",
+          "ip": "192.168.178.67",
+          "port": 3001,
+          "type": "monitoring"
+        },
+        {
+          "name": "Garmin Grafana",
+          "ip": "192.168.178.22",
+          "port": 3000,
+          "type": "monitoring"
+        },
+        {
+          "name": "Paperless ngx",
+          "ip": "192.168.178.22",
+          "port": 8000,
+          "type": "doc"
+        }
+      ]
+    },
+    "smartdisplay": {
+      "label": "Smart Displays (Ulanzi)",
+      "collapsed": true,
+      "devices": [
+        {
+          "name": "Ulanzi 1",
+          "ip": "192.168.178.41",
+          "type": "display"
+        },
+        {
+          "name": "Ulanzi 2",
+          "ip": "192.168.178.51",
+          "type": "display"
+        },
+        {
+          "name": "Ulanzi 3",
+          "ip": "192.168.178.20",
+          "type": "display"
+        },
+        {
+          "name": "Ulanzi 4",
+          "ip": "192.168.178.71",
+          "type": "display"
+        }
+      ]
+    },
+    "other": {
+      "label": "Sonstiges",
+      "collapsed": false,
+      "devices": [
+        {
+          "name": "nextCloud",
+          "ip": "192.168.178.169",
+          "http": 443,
+          "type": "cloud"
+        },
+        {
+          "name": "SAMSUNG C480FW",
+          "ip": "192.168.178.76",
+          "type": "printer"
+        },
+        {
+          "name": "NSA325 NAS",
+          "ip": "192.168.178.129",
+          "type": "nas"
+        },
+        {
+          "name": "Pulse Zero Pi",
+          "ip": "192.168.178.67",
+          "port": 7655,
+          "type": "iot"
+        }
+      ]
+    }
+  },
+  "proxmox_api": {
+    "pve1": {
+      "url": "https://192.168.178.171:8006/api2/json"
+    },
+    "pve2": {
+      "url": "https://192.168.178.218:8006/api2/json"
+    }
+  },
+  "proxmox_nodes": [
+    {
+      "label": "Proxmox 1 (pve)",
+      "url": "https://192.168.178.171:8006",
+      "token": "root@pam!backup-script=DEIN-TOKEN-HIER"
+    },
+    {
+      "label": "Proxmox 2 (pve26)",
+      "url": "https://192.168.178.218:8006",
+      "token": "root@pam!backup-script=DEIN-TOKEN-HIER"
+    }
+  ]
+}

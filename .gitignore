@@ -1,0 +1,13 @@
+# Laufzeitdaten (werden vom Checker erzeugt)
+state.json
+proxmox.json
+speed.json
+history.json
+
+# Echte Config mit API-Tokens NIEMALS committen
+config.json
+config.json.real
+
+# Python
+__pycache__/
+*.pyc
