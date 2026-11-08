@@ -117,6 +117,18 @@ def padto(s, w):
     return s + " " * (w - v)
 
 
+def hl(line, w):
+    """Selektions-Highlight: Hintergrund ueber volle Breite w, Farben bleiben.
+    RST wird durch RST+bg ersetzt, damit der Hintergrund durchgehend bleibt."""
+    bgc = CLR["selbg"]
+    v = vlen(line)
+    if v < w:
+        line = line + " " * (w - v)
+    else:
+        line = clip(line, w)
+    return bgc + line.replace(RST, RST + bgc) + RST
+
+
 def bar(frac, width, color):
     """Fortschrittsbalken. frac 0..1."""
     frac = max(0.0, min(1.0, frac))
@@ -349,16 +361,8 @@ def build_proxmox_lines(prox, w, sel_guest, frame):
             typ = (CLR["blue"] if g["type"] == "VM" else CLR["cyan"]) + g["type"] + RST
             name = g["name"]
             sel = (gi == sel_guest)
-            if sel:
-                # Saubere Highlight-Zeile (plain text, voller Hintergrund)
-                if running:
-                    memtxt = "{}/{}".format(human_bytes(g["mem"]), human_bytes(g["maxmem"]))
-                    plain = "\u25b8 {} {} {} {:>5.0f}% {}".format(
-                        "\u25b6" if running else "\u25a0", g["type"], name, memf * 100, memtxt)
-                else:
-                    plain = "\u25b8 \u25a0 {} {}  stopped".format(g["type"], name)
-                line = CLR["selbg"] + BOLD + padto(plain, w) + RST
-            elif running:
+            # Einheitliches Layout fuer ALLE Guests
+            if running:
                 memtxt = "{}/{}".format(human_bytes(g["mem"]), human_bytes(g["maxmem"]))
                 membar = bar(memf, 6, CLR["green"] if memf < 0.85 else CLR["orange"])
                 line = "  {} {} {} {} {}".format(
@@ -366,6 +370,9 @@ def build_proxmox_lines(prox, w, sel_guest, frame):
             else:
                 line = "  {} {} {} {}".format(
                     sdot, typ, padto(name, w - 17), CLR["dark"] + "stopped" + RST)
+            # Selektion nur per Hintergrund-Highlight (gleiche Ausrichtung)
+            if sel:
+                line = hl(line, w)
             out.append(line)
             gi += 1
         out.append("")
@@ -419,8 +426,8 @@ def main():
     msg = None
     msg_until = 0
 
-    # Maus-Tracking an (xterm/SSH)
-    sys.stdout.write(ESC + "[?1000h" + ESC + "[?25l")
+    # Cursor verstecken (Maus-Tracking nicht noetig)
+    sys.stdout.write(ESC + "[?25l")
     try:
         tty.setcbreak(fd)
         # stdin nicht-blockierend: os.read liefert sofort was da ist
@@ -488,7 +495,7 @@ def main():
     finally:
         fcntl.fcntl(fd, fcntl.F_SETFL, old_flags)
         termios.tcsetattr(fd, termios.TCSANOW, old)
-        sys.stdout.write(ESC + "[?1000l" + ESC + "[?25h" + RST)
+        sys.stdout.write(ESC + "[?25h" + RST)
         sys.stdout.write(ESC + "[2J" + ESC + "[H")
         sys.stdout.flush()
         print("Dashboard beendet.")
