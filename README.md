@@ -36,15 +36,32 @@ Nur **Python 3 stdlib + `fping`** — kein pip, kein venv, kein Framework.
 
 ## Steuerung
 
-| Taste        | Aktion                              |
-|--------------|-------------------------------------|
-| `q`          | Beenden                             |
-| `r`          | Ping-Check sofort                   |
-| `p`          | Proxmox sofort neu abfragen         |
-| `↑`/`↓`, `j`/`k` | Guest auswählen (Proxmox-Panel) |
-| `s`          | Ausgewählten Guest **starten**      |
-| `x`          | Ausgewählten Guest **herunterfahren** |
-| Maus         | Guest anklicken (SSH/xterm)         |
+| Taste                | Aktion                                                |
+|----------------------|-------------------------------------------------------|
+| `Tab` / `←`/`→`, `h`/`l` | Panel wechseln (**Geraete** <-> **Proxmox**)       |
+| `↑`/`↓`, `j`/`k`     | Element im aktiven Panel auswaehlen                   |
+| `Enter`              | **Lightbox-Modal oeffnen** (Aktionen & Details)       |
+| `1`..`5`             | Im Proxmox-Modal: Start / Shutdown / Reboot / Reset / Backup |
+| `q` / `ESC`          | Modal schliessen (wenn offen) bzw. **Dashboard beenden** (zu Bash) |
+| `s` / `x`            | Quick-Start / Quick-Stop fuer gewaehlten Proxmox-Guest |
+| `r` / `p`            | Ping-Check bzw. Proxmox-Status sofort aktualisieren   |
+
+### Lightbox Modals
+
+- **Proxmox Guest Modal (`Enter`)**:
+  Zeigt VMID, Node, Status, Uptime, CPU- & RAM-Balken.
+  Aktionen direkt per Tastendruck:
+  - `[1]` Start
+  - `[2]` Shutdown (sauber per ACPI)
+  - `[3]` Reboot
+  - `[4]` Stop / Reset (Force Kill)
+  - `[5]` **Backup erstellen** (Snapshot vzdump ueber PVE-API)
+  - `[q]` / `[ESC]` Schliessen
+
+- **Geraete Modal (`Enter`)**:
+  Zeigt IP, Gruppe, Typ, Ping-RTT und HTTP-Port-Status.
+  - `[r]` Ping sofort wiederholen
+  - `[q]` / `[ESC]` Schliessen
 
 ## Installation
 
@@ -77,9 +94,11 @@ im Format `root@pam!backup-script=<value>` eintragen.
 if [ "$(tty)" = "/dev/tty1" ]; then
     export TERM=linux
     clear
-    exec /usr/bin/python3 /opt/netbook-dashboard/dashboard.py
+    /usr/bin/python3 /opt/netbook-dashboard/dashboard.py
 fi
 ```
+
+*(Wichtig: **kein** `exec`, damit `q` sauber zur Bash-Shell beendet. In `~/.bashrc` kann ein Alias `alias dash='python3 /opt/netbook-dashboard/dashboard.py'` angelegt werden).*
 
 Datensammler als systemd-Service (`systemd/netbook-checker.service`):
 
