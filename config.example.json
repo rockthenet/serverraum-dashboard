@@ -307,7 +307,8 @@
     {
       "label": "Proxmox 1 (pve)",
       "url": "https://192.168.178.171:8006",
-      "token": "root@pam!backup-script=DEIN-TOKEN-HIER"
+      "token": "root@pam!backup-script=DEIN-TOKEN-HIER",
+      "backup_storage": "backup-nas-smb"
     },
     {
       "label": "Proxmox 2 (pve26)",

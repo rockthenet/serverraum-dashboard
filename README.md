@@ -86,6 +86,29 @@ pveum user token add root@pam backup-script --privsep=0
 Den `full-tokenid` + `value` in `config.json` unter `proxmox_nodes[].token`
 im Format `root@pam!backup-script=<value>` eintragen.
 
+### Backup-Ziel (Storage)
+
+Die Backup-Funktion (`[5]` im Proxmox-Modal) nutzt den Storage, der in
+Proxmox den **Content-Typ `backup`** hat. `local` scheidet damit automatisch
+aus (Fehler: *"can't use storage 'local' for backups"*).
+
+Pro Node kann das Ziel fest vorgegeben werden:
+
+```json
+"proxmox_nodes": [
+  {
+    "label": "Proxmox 1 (pve)",
+    "url": "https://192.168.178.171:8006",
+    "token": "root@pam!backup-script=...",
+    "backup_storage": "backup-nas-smb"
+  }
+]
+```
+
+Ohne `backup_storage` wird automatisch erkannt (Prioritaet: Name enthaelt `nas`,
+dann `backup`, `local` nur als letzte Wahl). Ist `snapshot` als Modus nicht
+moeglich, faellt das Dashboard automatisch auf `suspend` und dann `stop` zurueck.
+
 ### Autostart auf tty1 (Kiosk)
 
 `~/.bash_profile`:

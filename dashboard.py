@@ -25,6 +25,7 @@ import sys
 import termios
 import time
 import tty
+import urllib.error
 import urllib.parse
 import urllib.request
 
@@ -583,6 +584,64 @@ _CTX.check_hostname = False
 _CTX.verify_mode = ssl.CERT_NONE
 
 
+_BACKUP_STORAGE_CACHE = {}
+
+
+def get_backup_storage(node_cfg, node_name):
+    """Ermittelt Storage mit Content-Typ 'backup'.
+    Config-Override (proxmox_nodes[].backup_storage) hat Vorrang."""
+    override = node_cfg.get("backup_storage")
+    if override:
+        return override
+    key = (node_cfg.get("url"), node_name)
+    if key in _BACKUP_STORAGE_CACHE:
+        return _BACKUP_STORAGE_CACHE[key]
+    try:
+        url = "{}/api2/json/nodes/{}/storage".format(
+            node_cfg["url"].rstrip("/"), node_name)
+        req = urllib.request.Request(url)
+        req.add_header("Authorization", "PVEAPIToken=" + node_cfg["token"])
+        resp = urllib.request.urlopen(req, timeout=8, context=_CTX)
+        data = json.loads(resp.read().decode("utf-8")).get("data") or []
+        candidates = []
+        for s in data:
+            content = [c.strip() for c in s.get("content", "").split(",")]
+            if "backup" in content and s.get("active", 1):
+                candidates.append(s.get("storage"))
+        if candidates:
+            # Prioritaet: Name enthaelt 'nas' > 'backup' > sonstige (nicht 'local')
+            def score(n):
+                ln = (n or "").lower()
+                s = 0
+                if "nas" in ln:
+                    s += 20
+                if "backup" in ln:
+                    s += 10
+                if ln == "local":
+                    s -= 50
+                return -s
+            candidates.sort(key=score)
+            name = candidates[0]
+            _BACKUP_STORAGE_CACHE[key] = name
+            return name
+    except Exception:
+        pass
+    return None
+
+
+def _api_error(e):
+    """Liest die echte Fehlermeldung aus einem HTTPError-Body."""
+    try:
+        body = e.read().decode("utf-8", "replace")
+        data = json.loads(body)
+        errs = data.get("errors")
+        if isinstance(errs, dict) and errs:
+            return "; ".join("{}: {}".format(k, v) for k, v in errs.items())
+        return data.get("message") or body
+    except Exception:
+        return str(e)
+
+
 def guest_action(node_idx, node_name, vmid, gtype, action):
     """POST an PVE-API: start, shutdown, reboot, stop, backup."""
     nodes = CFG.get("proxmox_nodes", [])
@@ -591,29 +650,46 @@ def guest_action(node_idx, node_name, vmid, gtype, action):
     nc = nodes[node_idx]
 
     if action == "backup":
-        url = "{}/api2/json/nodes/{}/vzdump".format(nc["url"].rstrip("/"), node_name)
-        data = urllib.parse.urlencode({
-            "vmid": vmid,
-            "mode": "snapshot",
-            "compress": "zstd",
-        }).encode("utf-8")
-        req = urllib.request.Request(url, data=data, method="POST")
-    else:
-        kind = "qemu" if gtype == "VM" else "lxc"
-        url = "{}/api2/json/nodes/{}/{}/{}/status/{}".format(
-            nc["url"].rstrip("/"), node_name, kind, vmid, action)
-        req = urllib.request.Request(url, data=b"", method="POST")
+        storage = get_backup_storage(nc, node_name)
+        if not storage:
+            return "Fehler: kein Backup-Storage auf {}".format(node_name)
+        # Modus-Fallback: snapshot -> suspend -> stop
+        last_err = ""
+        for mode in ("snapshot", "suspend", "stop"):
+            url = "{}/api2/json/nodes/{}/vzdump".format(
+                nc["url"].rstrip("/"), node_name)
+            data = urllib.parse.urlencode({
+                "vmid": vmid,
+                "storage": storage,
+                "mode": mode,
+                "compress": "zstd",
+            }).encode("utf-8")
+            req = urllib.request.Request(url, data=data, method="POST")
+            req.add_header("Authorization", "PVEAPIToken=" + nc["token"])
+            try:
+                resp = urllib.request.urlopen(req, timeout=15, context=_CTX)
+                resp.read()
+                return "Backup -> {} ({}) laeuft".format(storage, mode)
+            except urllib.error.HTTPError as e:
+                last_err = _api_error(e)
+                if "snapshot" not in last_err.lower():
+                    return "Fehler: " + last_err[:55]
+            except Exception as e:
+                return "Fehler: " + str(e)[:55]
+        return "Fehler: " + last_err[:55]
 
+    kind = "qemu" if gtype == "VM" else "lxc"
+    url = "{}/api2/json/nodes/{}/{}/{}/status/{}".format(
+        nc["url"].rstrip("/"), node_name, kind, vmid, action)
+    req = urllib.request.Request(url, data=b"", method="POST")
     req.add_header("Authorization", "PVEAPIToken=" + nc["token"])
     try:
-        resp = urllib.request.urlopen(req, timeout=12, context=_CTX)
-        payload = json.loads(resp.read().decode("utf-8"))
-        task_id = payload.get("data", "")
-        if action == "backup":
-            return "Backup gestartet: {}".format(task_id[:25])
+        urllib.request.urlopen(req, timeout=12, context=_CTX)
         return "{} {} -> {} OK".format(gtype, vmid, action)
+    except urllib.error.HTTPError as e:
+        return "Fehler: " + _api_error(e)[:55]
     except Exception as e:
-        return "Fehler: {}".format(str(e)[:45])
+        return "Fehler: {}".format(str(e)[:55])
 
 
 # ═══════════════════════════════════════════════════════════════════
