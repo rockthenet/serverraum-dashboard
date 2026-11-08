@@ -19,6 +19,7 @@ Steuerung:
   x         Selektierten Guest HERUNTERFAHREN
   Maus      Guest anklicken (SSH/xterm)
 """
+import fcntl
 import json
 import os
 import re
@@ -412,6 +413,7 @@ def main():
 
     fd = sys.stdin.fileno()
     old = termios.tcgetattr(fd)
+    old_flags = fcntl.fcntl(fd, fcntl.F_GETFL)
     frame = 0
     sel_guest = 0
     msg = None
@@ -421,6 +423,8 @@ def main():
     sys.stdout.write(ESC + "[?1000h" + ESC + "[?25l")
     try:
         tty.setcbreak(fd)
+        # stdin nicht-blockierend: os.read liefert sofort was da ist
+        fcntl.fcntl(fd, fcntl.F_SETFL, old_flags | os.O_NONBLOCK)
         while True:
             state = load(STATE)
             prox = load(PROX)
@@ -446,63 +450,98 @@ def main():
             sys.stdout.flush()
             frame += 1
 
+            # Auf Eingabe warten (max 0.4s), dann ALLES Verfuegbare lesen
             r, _, _ = select.select([sys.stdin], [], [], 0.4)
             if not r:
                 continue
-            ch = sys.stdin.read(1)
+            try:
+                data = os.read(fd, 128)
+            except OSError:
+                data = b""
+            if not data:
+                continue
 
-            if ch in ("q", "Q"):
+            quit_now, sel_guest, act = handle_input(
+                data, guests, prox, sel_guest)
+            if quit_now:
                 break
-            elif ch in ("r", "R"):
+            if act == "ping":
                 subprocess.Popen([sys.executable, os.path.join(HERE, "checker.py")],
                                  stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
                 msg = "Ping-Check gestartet..."
                 msg_until = time.time() + 2
-            elif ch in ("p", "P"):
+            elif act == "prox":
                 subprocess.Popen([sys.executable, os.path.join(HERE, "proxmox.py")],
                                  stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
                 msg = "Proxmox-Abfrage gestartet..."
                 msg_until = time.time() + 2
-            elif ch in ("j",):
-                sel_guest = min(sel_guest + 1, max(0, len(guests) - 1))
-            elif ch in ("k",):
-                sel_guest = max(sel_guest - 1, 0)
-            elif ch in ("s", "S"):
-                if guests:
-                    ni, g = guests[sel_guest]
-                    node_name = prox["nodes"][ni]["node"]["name"]
-                    msg = guest_action(ni, node_name, g["vmid"], g["type"], "start")
-                    msg_until = time.time() + 3
-            elif ch in ("x", "X"):
-                if guests:
-                    ni, g = guests[sel_guest]
-                    node_name = prox["nodes"][ni]["node"]["name"]
-                    msg = guest_action(ni, node_name, g["vmid"], g["type"], "shutdown")
-                    msg_until = time.time() + 3
-            elif ch == ESC:
-                # Pfeiltasten oder Maus
-                seq = sys.stdin.read(1)
-                if seq == "[":
-                    code = sys.stdin.read(1)
-                    if code == "A":  # up
-                        sel_guest = max(sel_guest - 1, 0)
-                    elif code == "B":  # down
-                        sel_guest = min(sel_guest + 1, max(0, len(guests) - 1))
-                    elif code == "M":  # Maus
-                        b = ord(sys.stdin.read(1)) - 32
-                        mx = ord(sys.stdin.read(1)) - 32
-                        my = ord(sys.stdin.read(1)) - 32
-                        # Klick auf rechtes Panel -> Guest waehlen (grobe Heuristik)
-                        # Header Proxmox beginnt ca. bei body-Zeile; wir mappen linear
-                        idx = guest_row_from_y(prox, my)
-                        if idx is not None and idx < len(guests):
-                            sel_guest = idx
+            elif act == "start" and guests:
+                ni, g = guests[sel_guest]
+                node_name = prox["nodes"][ni]["node"]["name"]
+                msg = guest_action(ni, node_name, g["vmid"], g["type"], "start")
+                msg_until = time.time() + 3
+            elif act == "stop" and guests:
+                ni, g = guests[sel_guest]
+                node_name = prox["nodes"][ni]["node"]["name"]
+                msg = guest_action(ni, node_name, g["vmid"], g["type"], "shutdown")
+                msg_until = time.time() + 3
     finally:
+        fcntl.fcntl(fd, fcntl.F_SETFL, old_flags)
         termios.tcsetattr(fd, termios.TCSANOW, old)
         sys.stdout.write(ESC + "[?1000l" + ESC + "[?25h" + RST)
         sys.stdout.write(ESC + "[2J" + ESC + "[H")
         sys.stdout.flush()
         print("Dashboard beendet.")
+
+
+def handle_input(data, guests, prox, sel_guest):
+    """Parst den kompletten Eingabe-Buffer. Nie blockierend.
+    Returns (quit:bool, new_sel:int, action:str|None)."""
+    ng = max(0, len(guests) - 1)
+    act = None
+    i = 0
+    n = len(data)
+    while i < n:
+        b = data[i]
+        # ESC-Sequenz (Pfeiltasten / Maus)
+        if b == 0x1b:
+            # Pfeiltaste: ESC [ A/B/C/D
+            if i + 2 < n and data[i + 1] == 0x5b:  # '['
+                code = data[i + 2]
+                if code == 0x41:      # A = up
+                    sel_guest = max(sel_guest - 1, 0)
+                    i += 3; continue
+                elif code == 0x42:    # B = down
+                    sel_guest = min(sel_guest + 1, ng)
+                    i += 3; continue
+                elif code == 0x4d and i + 5 < n:  # 'M' Maus
+                    my = data[i + 5] - 32
+                    idx = guest_row_from_y(prox, my)
+                    if idx is not None and idx <= ng:
+                        sel_guest = idx
+                    i += 6; continue
+                else:
+                    i += 3; continue
+            else:
+                i += 1; continue
+        # Normale Tasten
+        c = chr(b) if b < 128 else ""
+        if c in ("q", "Q"):
+            return True, sel_guest, None
+        elif c in ("r", "R"):
+            act = "ping"
+        elif c in ("p", "P"):
+            act = "prox"
+        elif c == "j":
+            sel_guest = min(sel_guest + 1, ng)
+        elif c == "k":
+            sel_guest = max(sel_guest - 1, 0)
+        elif c in ("s", "S"):
+            act = "start"
+        elif c in ("x", "X"):
+            act = "stop"
+        i += 1
+    return False, sel_guest, act
 
 
 def guest_row_from_y(prox, my):

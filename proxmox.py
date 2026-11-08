@@ -91,6 +91,46 @@ def poll_node(node_cfg):
     return result
 
 
+def _prev_status():
+    """{vmid: status} aus dem letzten Lauf, fuer Change-Detection."""
+    prev = {}
+    try:
+        with open(OUT) as f:
+            old = json.load(f)
+        for node in old.get("nodes", []):
+            for g in node.get("guests", []):
+                prev[(node.get("label"), g.get("vmid"))] = g.get("status")
+    except Exception:
+        pass
+    return prev
+
+
+def _notify_changes(prev, out):
+    """Vergleicht alt/neu und schickt ntfy bei up/down-Wechsel."""
+    if not prev:
+        return  # erster Lauf: keine Spam-Flut
+    try:
+        import notify
+    except Exception:
+        return
+    for node in out.get("nodes", []):
+        label = node.get("label")
+        for g in node.get("guests", []):
+            key = (label, g.get("vmid"))
+            old = prev.get(key)
+            new = g.get("status")
+            if old is None or old == new:
+                continue
+            name = "{} {} {}".format(g.get("type"), g.get("vmid"), g.get("name"))
+            if new == "running":
+                notify.send("{} ist UP ({})".format(name, label),
+                            title="Proxmox UP", tags="arrow_up,green_circle")
+            elif old == "running":
+                notify.send("{} ist DOWN ({})".format(name, label),
+                            title="Proxmox DOWN", tags="arrow_down,red_circle",
+                            priority="high")
+
+
 def main():
     try:
         with open(CONFIG) as f:
@@ -99,10 +139,13 @@ def main():
         cfg = {}
 
     pve_nodes = cfg.get("proxmox_nodes", [])
+    prev = _prev_status()
     out = {"time": time.time(), "nodes": []}
 
     for node_cfg in pve_nodes:
         out["nodes"].append(poll_node(node_cfg))
+
+    _notify_changes(prev, out)
 
     with open(OUT, "w") as f:
         json.dump(out, f)

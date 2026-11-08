@@ -302,6 +302,7 @@
       "url": "https://192.168.178.218:8006/api2/json"
     }
   },
+  "ntfy_topic": "dein-ntfy-topic",
   "proxmox_nodes": [
     {
       "label": "Proxmox 1 (pve)",

@@ -64,6 +64,15 @@ def run_fping(ip_list, timeout=800):
     return results
 
 
+def _prev_internet():
+    """Internet-Status aus dem letzten Lauf (fuer Change-Detection)."""
+    try:
+        with open(os.path.join(HERE, "state.json")) as f:
+            return json.load(f).get("internet")
+    except Exception:
+        return None
+
+
 def main():
     cfg = load_config()
     ips_map = collect_ips(cfg)
@@ -72,9 +81,19 @@ def main():
     if inet_ip not in all_ips:
         all_ips.append(inet_ip)
 
+    prev_inet = _prev_internet()
     fping_to = cfg.get("fping_timeout", 800)
     ping_results = run_fping(all_ips, fping_to)
     internet_ok = ping_results.get(inet_ip, (False, 0))[0]
+
+    # Internet wieder online -> ntfy (offline geht ja eh nicht raus)
+    if internet_ok and prev_inet is False:
+        try:
+            import notify
+            notify.send("Internet ist wieder ONLINE",
+                        title="Internet", tags="globe_with_meridians", priority="high")
+        except Exception:
+            pass
 
     now = time.time()
     online = 0
