@@ -744,6 +744,21 @@ def handle_input(data, active_panel, sel_dev, sel_guest, num_devs, num_guests, m
     return res
 
 
+def safe_write(text):
+    """Schreibt text sicher auf stdout (faengt BlockingIOError ueber SSH ab)."""
+    try:
+        sys.stdout.write(text)
+        sys.stdout.flush()
+    except (BlockingIOError, OSError):
+        data = text.encode("utf-8")
+        while data:
+            try:
+                n = os.write(1, data)
+                data = data[n:]
+            except (BlockingIOError, OSError):
+                time.sleep(0.005)
+
+
 # ═══════════════════════════════════════════════════════════════════
 # MAIN LOOP
 # ═══════════════════════════════════════════════════════════════════
@@ -757,8 +772,16 @@ def main():
     CFG = load(CONFIG) or {"groups": {}}
 
     fd = sys.stdin.fileno()
-    old = termios.tcgetattr(fd)
-    old_flags = fcntl.fcntl(fd, fcntl.F_GETFL)
+    is_tty = os.isatty(fd)
+    old = termios.tcgetattr(fd) if is_tty else None
+
+    # Sicherstellen, dass stdout blockierend bleibt (vermeidet BlockingIOError ueber SSH)
+    try:
+        out_flags = fcntl.fcntl(1, fcntl.F_GETFL)
+        if out_flags & os.O_NONBLOCK:
+            fcntl.fcntl(1, fcntl.F_SETFL, out_flags & ~os.O_NONBLOCK)
+    except Exception:
+        pass
 
     frame = 0
     active_panel = 1  # Standard: Proxmox
@@ -770,8 +793,8 @@ def main():
 
     sys.stdout.write(ESC + "[?25l")
     try:
-        tty.setcbreak(fd)
-        fcntl.fcntl(fd, fcntl.F_SETFL, old_flags | os.O_NONBLOCK)
+        if is_tty:
+            tty.setcbreak(fd)
 
         while True:
             state = load(STATE)
@@ -798,10 +821,7 @@ def main():
 
             rows = render(w, h, state, prox, speed, frame,
                           active_panel, sel_dev, sel_guest, msg, modal)
-            sys.stdout.write(ESC + "[H")
-            sys.stdout.write("\n".join(rows))
-            sys.stdout.write(RST)
-            sys.stdout.flush()
+            safe_write(ESC + "[H" + "\n".join(rows) + RST)
             frame += 1
 
             # Warten auf Input (0.35s Timeout fuer Animation)
@@ -896,11 +916,11 @@ def main():
                 msg_until = time.time() + 3
 
     finally:
-        try:
-            fcntl.fcntl(fd, fcntl.F_SETFL, old_flags)
-            termios.tcsetattr(fd, termios.TCSANOW, old)
-        except Exception:
-            pass
+        if is_tty and old is not None:
+            try:
+                termios.tcsetattr(fd, termios.TCSANOW, old)
+            except Exception:
+                pass
         sys.stdout.write(ESC + "[?25h" + RST)
         sys.stdout.write(ESC + "[2J" + ESC + "[H")
         sys.stdout.flush()
