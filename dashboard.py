@@ -773,7 +773,12 @@ def render(w, h, state, prox, speed, uni, dc, frame, active_panel,
     uni_hits = []
     uni_len = 0
     if rest > 0:
-        reserve = 1 if (dc and rest >= 5) else 0
+        if dc and rest >= 5:
+            reserve = 2          # Leerzeile + deCONZ-Zeile
+        elif dc and rest == 4:
+            reserve = 1
+        else:
+            reserve = 0
         uni_max = max(1, rest - reserve) if reserve else rest
         uni_lines = build_unifi_lines(
             uni, RW, uni_max,
@@ -782,7 +787,12 @@ def render(w, h, state, prox, speed, uni, dc, frame, active_panel,
         uni_len = len(uni_lines)
         rest = max(0, rest - uni_len)
     dc_hits = []
+    dc_off = 0
     if dc and rest > 0:
+        if rest >= 2:
+            right_lines.append("")       # Abstand zum UniFi-Block
+            dc_off = 1
+            rest -= 1
         right_lines += build_deconz_lines(
             dc, RW, rest, active_panel == 3, dc_hits)
 
@@ -805,13 +815,13 @@ def render(w, h, state, prox, speed, uni, dc, frame, active_panel,
                       "col": LW + 2 + RW // 2})
     if dc_hits:
         items.append({"panel": 3, "idx": 0,
-                      "row": 3 + len(prox_lines) + uni_len + dc_hits[0],
+                      "row": 3 + len(prox_lines) + uni_len + dc_off + dc_hits[0],
                       "col": LW + 2 + RW // 2})
 
     global LAST_LAYOUT
     LAST_LAYOUT = {
         "ap_hits": [(3 + len(prox_lines) + off, ai) for off, ai in uni_hits],
-        "dc_hit": ((3 + len(prox_lines) + uni_len + dc_hits[0])
+        "dc_hit": ((3 + len(prox_lines) + uni_len + dc_off + dc_hits[0])
                    if dc_hits else None),
         "items": items,
         "x0": LW + 2,

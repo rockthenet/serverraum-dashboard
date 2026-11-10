@@ -284,8 +284,9 @@ automatisch `/api/auth/login` + `/proxy/network` verwendet. Abgefragt werden
 
 ## deCONZ-Block
 
-Unter dem UniFi-Block steht ein kompakter deCONZ-/Phoscon-Block. Im
-Hauptbildschirm zeigt er **nur die Anzahl** aller Zigbee-Geräte:
+Unter dem UniFi-Block steht – durch eine Leerzeile abgesetzt – ein kompakter
+deCONZ-/Phoscon-Block. Im Hauptbildschirm zeigt er **nur die Anzahl** aller
+Zigbee-Geräte:
 
 ```
 ⬡ deCONZ  104 Geraete
