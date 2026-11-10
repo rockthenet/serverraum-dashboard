@@ -9,7 +9,7 @@ Zeigt in einem mehrspaltigen ASCII-Layout:
 - **Erreichbarkeit** aller Netzwerk-Geräte (Ping + optionaler HTTP-Check), gruppiert
 - **Internet-Status** inkl. Verbindungsart (LAN/WLAN, IP, SSID) + regelmäßiger **Speedtest** (Down/Up)
 - **Proxmox-Panel**: beide PVE-Nodes mit CPU/RAM/Disk-Auslastung und allen
-  VMs/Containern inkl. RAM-Nutzung - Start/Stop direkt aus dem Dashboard
+  VMs/Containern inkl. RAM-Nutzung und Uptime je Gast - Start/Stop direkt aus dem Dashboard
 - **Verwaltung im TUI**: Geräte anlegen / pausieren / löschen, Intervalle
   für Ping und Speedtest einstellen, Statusdauer je Gerät
 - **ntfy-Meldungen pro Gerät**: auf Wunsch bei DOWN, UP oder beidem
@@ -203,6 +203,9 @@ Meldungen pro Durchlauf, Rest als Sammelmeldung).
 
 Gelesen wird `/proc/uptime`; bei schmalem Terminal entfällt zuerst die
 Hardware-/OS-Info, die Uptime bleibt stehen.
+
+Im Proxmox-Panel steht hinter jedem laufenden CT/VM ebenfalls die Uptime
+(`up 86d5h`), im Detail-Modal zusätzlich ausgeschrieben.
 
 ## Statusdauer
 
