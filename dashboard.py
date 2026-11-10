@@ -791,9 +791,13 @@ def render(w, h, state, prox, speed, uni, dc, frame, active_panel,
     cw_dev = (LW - (nc_dev - 1)) // nc_dev
     items = []
     for r, di, ci in dev_hits:
+        if r >= body_h:
+            continue
         items.append({"panel": 0, "idx": di, "row": 3 + r,
                       "col": 1 + ci * (cw_dev + 1) + cw_dev // 2})
     for r, gi in prox_hits:
+        if r >= body_h:
+            continue
         items.append({"panel": 1, "idx": gi, "row": 3 + r,
                       "col": LW + 2 + RW // 2})
     for off, ai in uni_hits:
