@@ -1,6 +1,7 @@
 # Laufzeitdaten (werden vom Checker erzeugt)
 state.json
 proxmox.json
+unifi.json
 speed.json
 history.json
 

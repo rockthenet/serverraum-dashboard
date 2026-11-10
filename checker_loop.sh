@@ -3,10 +3,12 @@
 # Intervalle kommen aus config.json:
 #   poll_interval          Sekunden zwischen Ping-Checks (Standard 15)
 #   speedtest_interval_min Minuten zwischen Speedtests (Standard 30)
+#   unifi_interval_sec     Sekunden zwischen UniFi-Abfragen (Standard 60)
 # Proxmox wird alle 30 s abgefragt.
 cd "$(dirname "$0")" || cd /opt/netbook-dashboard
 
 last_prox=0
+last_unifi=0
 
 cfg_int() {
     python3 - "$1" "$2" <<'PY'
@@ -23,6 +25,7 @@ PY
 while true; do
     interval=$(cfg_int poll_interval 15)
     speed_min=$(cfg_int speedtest_interval_min 30)
+    unifi_sec=$(cfg_int unifi_interval_sec 60)
     now=$(date +%s)
 
     python3 checker.py >/dev/null 2>&1
@@ -30,6 +33,11 @@ while true; do
     if [ "$last_prox" -eq 0 ] || [ $((now - last_prox)) -ge 30 ]; then
         python3 proxmox.py >/dev/null 2>&1 &
         last_prox=$now
+    fi
+
+    if [ "$last_unifi" -eq 0 ] || [ $((now - last_unifi)) -ge "$unifi_sec" ]; then
+        python3 unifi.py >/dev/null 2>&1 &
+        last_unifi=$now
     fi
 
     due=1

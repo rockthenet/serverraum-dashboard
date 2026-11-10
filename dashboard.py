@@ -80,6 +80,7 @@ HERE = os.path.dirname(os.path.abspath(__file__))
 STATE = os.path.join(HERE, "state.json")
 PROX = os.path.join(HERE, "proxmox.json")
 SPEED = os.path.join(HERE, "speed.json")
+UNI = os.path.join(HERE, "unifi.json")
 CONFIG = os.path.join(HERE, "config.json")
 
 # ─── ANSI ───
@@ -547,7 +548,7 @@ def build_confirm_modal(modal, mw):
 # RENDER
 # ═══════════════════════════════════════════════════════════════════
 
-def render(w, h, state, prox, speed, frame, active_panel, sel_dev, sel_guest, msg, modal):
+def render(w, h, state, prox, speed, uni, frame, active_panel, sel_dev, sel_guest, msg, modal):
     """Baut den kompletten Screen (inkl. evtl. Modal-Overlay)."""
     rows = []
     devs = (state or {}).get("devices", {})
@@ -656,6 +657,9 @@ def render(w, h, state, prox, speed, frame, active_panel, sel_dev, sel_guest, ms
     body_h = max(1, h - 5)
     left_lines = build_device_lines(devs, state, LW, sel_dev if active_panel == 0 else -1)
     right_lines = build_proxmox_lines(prox, RW, sel_guest if active_panel == 1 else -1)
+    rest = max(0, body_h - len(right_lines))
+    if rest > 0:
+        right_lines = right_lines + build_unifi_lines(uni, RW, rest)
 
     for i in range(body_h):
         lc_cell = left_lines[i] if i < len(left_lines) else ""
@@ -857,6 +861,141 @@ def build_proxmox_lines(prox, w, sel_guest):
             out.append(line)
             gi += 1
         out.append("")
+    return out
+
+
+def _signal_color(sig):
+    """Farbe nach WLAN-Signalstaerke (dBm)."""
+    if sig is None:
+        return CLR["dark"]
+    if sig >= -60:
+        return CLR["green"]
+    if sig >= -70:
+        return CLR["yellow"]
+    if sig >= -78:
+        return CLR["orange"]
+    return CLR["red"]
+
+
+def _unifi_ap_line(ap, w):
+    name = ap.get("name") or ap.get("mac") or "AP"
+    if ap.get("up"):
+        dot = CLR["green"] + "\u25b2" + RST
+        head = "  {} {}{}".format(
+            dot, name,
+            CLR["gray"] + "  up " + human_uptime(ap.get("uptime", 0)) + RST)
+        tail = "{} {} Ger".format(
+            ap.get("model_name") or ap.get("model") or "",
+            int(ap.get("num_sta") or 0)).strip()
+    else:
+        dot = CLR["red"] + "\u25bc" + RST
+        head = "  {} {}{}".format(dot, name, CLR["red"] + "  offline" + RST)
+        tail = ""
+    if tail and vlen(head) + vlen(tail) + 1 > w:
+        tail = "{} Ger".format(int(ap.get("num_sta") or 0))
+    if tail and vlen(head) + vlen(tail) + 1 > w:
+        tail = ""
+    line = head + " " * max(0, w - vlen(head) - vlen(tail)) + tail
+    return clip(line, w)
+
+
+def _unifi_client_line(cl, w):
+    sig = cl.get("signal")
+    color = _signal_color(sig)
+    name = cl.get("name") or cl.get("hostname") or cl.get("ip") or "?"
+    prefix = "  {} ".format(color + "\u00b7" + RST)
+    sigtxt = "{}dBm".format(sig) if sig is not None else "?"
+    sigtxt = sigtxt.rjust(6)
+    tails = [
+        color + sigtxt + RST + "  " + CLR["dark"] + (cl.get("ap_name") or "") + RST,
+        color + sigtxt + RST,
+        "",
+    ]
+    if not cl.get("ap_name"):
+        tails = tails[1:]
+    tail = tails[0]
+    name_w = w - vlen(prefix) - vlen(tail) - 1
+    for cand in tails:
+        if w - vlen(prefix) - vlen(cand) - 1 >= 5:
+            tail = cand
+            name_w = w - vlen(prefix) - vlen(cand) - 1
+            break
+    else:
+        name_w = max(1, w - vlen(prefix) - 1)
+    name_w = max(1, name_w)
+    line = prefix + padto(clip(name, name_w), name_w)
+    if tail:
+        line += " " + tail
+    return clip(line, w)
+
+
+def build_unifi_lines(uni, w, max_lines):
+    """UniFi-Block: APs + WLAN-Clients (kompakt, unter dem Proxmox-Panel)."""
+    out = []
+    if not uni:
+        out.append(CLR["dark"] + " \u2b24 UniFi: keine Daten" + RST)
+        return out
+
+    aps = uni.get("aps") or []
+    clients = uni.get("clients") or []
+    ap_total = int(uni.get("ap_total") or len(aps))
+    ap_up = int(uni.get("ap_up") if uni.get("ap_up") is not None
+              else sum(1 for a in aps if a.get("up")))
+    wlan = int(uni.get("wlan_count") if uni.get("wlan_count") is not None
+               else len(clients))
+    wired = int(uni.get("wired_count") or 0)
+
+    if not uni.get("ok"):
+        hc = CLR["red"]
+    elif ap_total and ap_up == ap_total:
+        hc = CLR["green"]
+    elif ap_up:
+        hc = CLR["yellow"]
+    else:
+        hc = CLR["red"]
+
+    head = "{}\u2b24 {}{}UniFi{}  {}/{} APs \u00b7 {} WLAN".format(
+        hc, BOLD, hc, RST, ap_up, ap_total, wlan)
+    if wired:
+        head += CLR["dark"] + " \u00b7 {} LAN".format(wired) + RST
+    out.append(head)
+    if max_lines is not None and len(out) >= max_lines:
+        return out
+
+    if not uni.get("ok"):
+        age = human_age(time.time() - (uni.get("ts") or 0))
+        out.append(CLR["red"] + "  Controller nicht erreichbar" + RST
+                   + CLR["dark"] + " (Daten vor {})".format(age) + RST)
+        if max_lines is not None and len(out) >= max_lines:
+            return out
+
+    avail = None if max_lines is None else max(0, max_lines - len(out))
+    if avail is not None and avail <= 0:
+        return out
+
+    ap_lines = [_unifi_ap_line(a, w) for a in aps]
+    cl_lines = [_unifi_client_line(c, w) for c in clients]
+
+    if avail is not None and len(ap_lines) > avail:
+        out.extend(ap_lines[:avail])
+        return out
+    out.extend(ap_lines)
+    if avail is not None:
+        avail -= len(ap_lines)
+    else:
+        avail = None
+    if avail is not None and avail <= 0:
+        return out
+
+    if avail is None or len(cl_lines) <= avail:
+        out.extend(cl_lines)
+    elif avail <= 1:
+        out.extend(cl_lines[:avail])
+    else:
+        show = avail - 1
+        out.extend(cl_lines[:show])
+        out.append(CLR["dark"] + "  +{} weitere Geraete".format(
+            len(cl_lines) - show) + RST)
     return out
 
 
@@ -1424,6 +1563,7 @@ def main():
             state = load(STATE)
             prox = load(PROX)
             speed = load(SPEED)
+            uni = load(UNI)
 
             dev_items = flat_devices(CFG)
             guest_items = flat_guests(prox)
@@ -1443,7 +1583,7 @@ def main():
             if msg and time.time() > msg_until:
                 msg = None
 
-            rows = render(w, h, state, prox, speed, frame,
+            rows = render(w, h, state, prox, speed, uni, frame,
                           active_panel, sel_dev, sel_guest, msg, modal)
             safe_write(ESC + "[H" + "\n".join(rows) + RST)
             frame += 1

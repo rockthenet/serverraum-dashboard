@@ -10,6 +10,8 @@ Zeigt in einem mehrspaltigen ASCII-Layout:
 - **Internet-Status** inkl. Verbindungsart (LAN/WLAN, IP, SSID) + regelmäßiger **Speedtest** (Down/Up)
 - **Proxmox-Panel**: beide PVE-Nodes mit CPU/RAM/Disk-Auslastung und allen
   VMs/Containern inkl. RAM-Nutzung und Uptime je Gast - Start/Stop direkt aus dem Dashboard
+- **UniFi-Block** unter dem Proxmox-Panel: Status der Access Points, Anzahl und
+  Signalstärke der WLAN-Geräte (schwächste zuerst), Wired-Zähler
 - **Verwaltung im TUI**: Geräte anlegen / pausieren / löschen, Intervalle
   für Ping und Speedtest einstellen, Statusdauer je Gerät
 - **ntfy-Meldungen pro Gerät**: auf Wunsch bei DOWN, UP oder beidem
@@ -34,12 +36,13 @@ Nur **Python 3 stdlib + `fping`** — kein pip, kein venv, kein Framework.
 | `dashboard.py`     | Die TUI (ANSI-Rendering, Tastatur/Maus, Proxmox-Aktionen)   |
 | `checker.py`       | Ping- + HTTP-Check aller Geräte → `state.json`              |
 | `proxmox.py`       | Fragt PVE-API ab (Nodes, VMs, CTs) → `proxmox.json`         |
+| `unifi.py`         | Fragt UniFi-Controller ab (APs, WLAN-Clients) → `unifi.json` |
 | `speedtest.py`     | Minimaler Down/Up-Speedtest → `speed.json`                  |
-| `checker_loop.sh`  | Hintergrund-Loop: Ping/Proxmox/Speedtest nach `config.json`  |
+| `checker_loop.sh`  | Hintergrund-Loop: Ping/Proxmox/UniFi/Speedtest nach `config.json` |
 | `boot_notify.py`   | Meldet nach dem Boot per ntfy, sobald Dashboard + Internet laufen |
 | `notify.py`        | ntfy-Versand (Topic aus `config.json`)                      |
 | `bin/dashboard`    | Shell-Befehl `dashboard` zum Starten der TUI                |
-| `config.json`      | Geräteliste + Proxmox-Zugangsdaten + Intervalle (**nicht im Repo**) |
+| `config.json`      | Geräteliste + Proxmox-/UniFi-Zugangsdaten + Intervalle (**nicht im Repo**) |
 
 ## Steuerung
 
@@ -207,6 +210,45 @@ Hardware-/OS-Info, die Uptime bleibt stehen.
 Im Proxmox-Panel steht hinter jedem laufenden CT/VM ebenfalls die Uptime
 (`up 86d5h`), im Detail-Modal zusätzlich ausgeschrieben.
 
+## UniFi-Block
+
+Unter dem Proxmox-Panel steht ein kompakter UniFi-Block:
+
+```
+⬤ UniFi  2/2 APs · 44 WLAN · 12 LAN
+  ▲ oben  up 345d22h                      AC Pro 16 Ger
+  ▲ unten  up 345d22h                     AC Pro 28 Ger
+  · shelly1-8CAAB555A9D7                  -86dBm  unten
+  · Pixel-10                              -77dBm  unten
+  +35 weitere Geraete
+```
+
+- Kopfzeile: online/gesamt APs, Anzahl WLAN-Clients, dazu LAN-Clients
+- AP-Zeilen: Uptime hinter dem Namen, Modell + Clientzahl rechts; ausgefallene
+  APs erscheinen rot mit `offline`
+- WLAN-Zeilen: **schwächste Verbindung zuerst**, dBm farbig (grün ≥ -60,
+  gelb ≥ -70, orange ≥ -78, rot darunter) und der AP-Name
+- Bei wenig Platz wird gekürzt und mit `+N weitere Geraete` zusammengefasst
+- Ist der Controller nicht erreichbar, bleiben die letzten Daten sichtbar und
+  der Block zeigt `Controller nicht erreichbar (Daten vor …)`
+
+Zugang in `config.json` (Modus 600, **nicht ins Repo**):
+
+```json
+"unifi_interval_sec": 60,
+"unifi": {
+  "url": "https://192.168.178.175:8443",
+  "username": "admin",
+  "password": "…",
+  "site": "default",
+  "timeout": 8,
+  "verify_tls": false
+}
+```
+`unifi.py` nutzt den klassischen Login (`/api/login`); bei UniFi OS wird
+automatisch `/api/auth/login` + `/proxy/network` verwendet. Abgefragt werden
+`stat/device` (APs), `stat/sta` (Clients) und `stat/health`.
+
 ## Statusdauer
 
 `checker.py` schreibt pro Geraet `since`, `last_down` und `last_up` in
@@ -229,7 +271,7 @@ sudo mkdir -p /opt/netbook-dashboard
 sudo cp *.py *.sh /opt/netbook-dashboard/
 sudo install -m 755 bin/dashboard /usr/local/bin/dashboard
 cp config.example.json /opt/netbook-dashboard/config.json
-# config.json anpassen: Geräte + Proxmox-Tokens eintragen
+# config.json anpassen: Geräte + Proxmox-Tokens + UniFi-Zugang eintragen
 ```
 
 ### Proxmox-Token erzeugen

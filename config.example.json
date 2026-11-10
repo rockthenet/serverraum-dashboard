@@ -319,5 +319,14 @@
       "url": "https://192.168.178.218:8006",
       "token": "root@pam!backup-script=DEIN-TOKEN-HIER"
     }
-  ]
+  ],
+  "unifi_interval_sec": 60,
+  "unifi": {
+    "url": "https://192.168.178.175:8443",
+    "username": "admin",
+    "password": "DEIN-PASSWORT-HIER",
+    "site": "default",
+    "timeout": 8,
+    "verify_tls": false
+  }
 }
