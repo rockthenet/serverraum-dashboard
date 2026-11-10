@@ -9,7 +9,9 @@ Zeigt in einem mehrspaltigen ASCII-Layout:
 - **Erreichbarkeit** aller Netzwerk-Geräte (Ping + optionaler HTTP-Check), gruppiert
 - **Internet-Status** + regelmäßiger **Speedtest** (Down/Up)
 - **Proxmox-Panel**: beide PVE-Nodes mit CPU/RAM/Disk-Auslastung und allen
-  VMs/Containern inkl. RAM-Nutzung — Start/Stop direkt aus dem Dashboard
+  VMs/Containern inkl. RAM-Nutzung - Start/Stop direkt aus dem Dashboard
+- **Verwaltung im TUI**: Geräte anlegen / pausieren / löschen, Intervalle
+  für Ping und Speedtest einstellen, Statusdauer je Gerät
 
 Nur **Python 3 stdlib + `fping`** — kein pip, kein venv, kein Framework.
 
@@ -31,8 +33,8 @@ Nur **Python 3 stdlib + `fping`** — kein pip, kein venv, kein Framework.
 | `checker.py`       | Ping- + HTTP-Check aller Geräte → `state.json`              |
 | `proxmox.py`       | Fragt PVE-API ab (Nodes, VMs, CTs) → `proxmox.json`         |
 | `speedtest.py`     | Minimaler Down/Up-Speedtest → `speed.json`                  |
-| `checker_loop.sh`  | Hintergrund-Loop: Ping 15 s, Proxmox 30 s, Speedtest 30 min |
-| `config.json`      | Geräteliste + Proxmox-Zugangsdaten (**nicht im Repo**)      |
+| `checker_loop.sh`  | Hintergrund-Loop: Ping/Proxmox/Speedtest nach `config.json`  |
+| `config.json`      | Geräteliste + Proxmox-Zugangsdaten + Intervalle (**nicht im Repo**) |
 
 ## Steuerung
 
@@ -41,6 +43,10 @@ Nur **Python 3 stdlib + `fping`** — kein pip, kein venv, kein Framework.
 | `Tab` / `←`/`→`, `h`/`l` | Panel wechseln (**Geraete** <-> **Proxmox**)       |
 | `↑`/`↓`, `j`/`k`     | Element im aktiven Panel auswaehlen                   |
 | `Enter`              | **Lightbox-Modal oeffnen** (Aktionen & Details)       |
+| `a`                  | **Geraet anlegen** (Name, IP/Host, optional HTTP-Port, Gruppe) |
+| `Space`              | **Geraet pausieren / wieder aktivieren** (kein Ping, zaehlt nicht mit) |
+| `d`                  | **Geraet loeschen** (mit Rueckfrage)                  |
+| `c`                  | **Intervalle einstellen** (Ping, Speedtest)           |
 | `1`..`5`             | Im Proxmox-Modal: Start / Shutdown / Reboot / Reset / Backup |
 | `q` / `ESC`          | Modal schliessen (wenn offen) bzw. **Dashboard beenden** (zu Bash) |
 | `s` / `x`            | Quick-Start / Quick-Stop fuer gewaehlten Proxmox-Guest |
@@ -62,6 +68,43 @@ Nur **Python 3 stdlib + `fping`** — kein pip, kein venv, kein Framework.
   Zeigt IP, Gruppe, Typ, Ping-RTT und HTTP-Port-Status.
   - `[r]` Ping sofort wiederholen
   - `[q]` / `[ESC]` Schliessen
+
+## Geraeteverwaltung (direkt im Dashboard)
+
+- `a` oeffnet ein Formular (Name, IP/Host, HTTP-Port optional, Gruppe per `<` / `>`).
+  Gespeichert wird direkt in `config.json`, der Checker laeuft sofort.
+- `Space` pausiert das gewaehlte Geraet: kein Ping mehr, zaehlt nicht in
+  online/total und erscheint als `PAUSE` (Header: `⏸N`). Erneutes `Space`
+  aktiviert es wieder.
+- `d` loescht nach Rueckfrage, `Enter` zeigt Details inkl. derselben Aktionen.
+
+Aenderungen werden atomar in `config.json` geschrieben (Modus 600) - kein
+Editor und kein Dienst-Neustart noetig.
+
+## Intervalle & Performance
+
+In `config.json` (oder bequem per `c` im Dashboard):
+
+| Feld | Standard | Bedeutung |
+|---|---|---|
+| `poll_interval` | 15 | Sekunden zwischen Ping-Runden (`fping`, 1 Paket/Host) |
+| `speedtest_interval_min` | 30 | Minuten zwischen Speedtests (~500 KB pro Lauf) |
+| `fping_timeout` | 800 | ms pro Host |
+
+`checker_loop.sh` liest die Werte vor jedem Durchlauf - Aenderungen greifen
+sofort, ohne Dienst-Neustart. Proxmox wird weiterhin alle 30 s abgefragt.
+
+## Statusdauer
+
+`checker.py` schreibt pro Geraet `since`, `last_down` und `last_up` in
+`state.json`:
+
+- Geraeteliste: Dauer des aktuellen Zustands hinter der Latenz (`4d3h`, `5h12`, `45m`)
+- Statuszeile: `INTERNET ONLINE` + Dauer des aktuellen Zustands
+- Modal (`Enter`): `Online seit 10.11. 18:02 (2h 05m)`, `Zuletzt down ...`, `Zuletzt up ...`
+
+Die Historie bleibt bei einem Dienst-Neustart erhalten (sie wird aus dem alten
+`state.json` fortgeschrieben), solange das Geraet in der Config bleibt.
 
 ## Installation
 

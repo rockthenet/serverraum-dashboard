@@ -2,6 +2,7 @@
   "poll_interval": 15,
   "fping_timeout": 800,
   "http_timeout": 3,
+  "speedtest_interval_min": 30,
   "groups": {
     "proxmox": {
       "label": "Proxmox / Virtualisierung",

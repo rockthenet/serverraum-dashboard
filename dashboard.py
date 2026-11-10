@@ -192,6 +192,59 @@ def human_uptime(sec):
     return "{}h{}m".format(h, m)
 
 
+def human_age(sec):
+    """Kompakte Dauer fuer die Statusspalte: 12s, 45m, 5h12, 4d3h."""
+    if sec is None:
+        return "-"
+    try:
+        sec = int(max(0, sec))
+    except Exception:
+        return "-"
+    if sec < 60:
+        return "{}s".format(sec)
+    if sec < 3600:
+        return "{}m".format(sec // 60)
+    if sec < 86400:
+        return "{}h{:02d}".format(sec // 3600, (sec % 3600) // 60)
+    return "{}d{}h".format(sec // 86400, (sec % 86400) // 3600)
+
+
+def fmt_ts(ts):
+    """Zeitstempel als 10.11. 18:07 (leer bei None)."""
+    if not ts:
+        return "-"
+    try:
+        return time.strftime("%d.%m. %H:%M", time.localtime(ts))
+    except Exception:
+        return "-"
+
+
+def age_of(rec):
+    """Sekunden seit letztem Statuswechsel eines Geraete-Records."""
+    if not rec or not rec.get("since"):
+        return None
+    return time.time() - rec["since"]
+
+
+def group_choices():
+    """(gid, label)-Paare fuer Formulare."""
+    return [(gid, CFG.get("groups", {}).get(gid, {}).get("label", gid))
+            for gid in sorted(CFG.get("groups", {}))]
+
+
+def save_config(cfg):
+    """config.json atomar schreiben (Rechte/Format bleiben erhalten)."""
+    tmp = CONFIG + ".tmp"
+    with open(tmp, "w") as f:
+        json.dump(cfg, f, indent=2, ensure_ascii=False)
+        f.write("\n")
+    os.replace(tmp, CONFIG)
+    try:
+        os.chmod(CONFIG, 0o600)
+    except Exception:
+        pass
+
+
 def load(path):
     try:
         with open(path) as f:
@@ -345,12 +398,36 @@ def build_device_modal(modal, mw):
     lines.append(mline("IP:      {}".format(dev.get("ip", "-"))))
     lines.append(mline("Typ:     {}".format(dev.get("type", "-"))))
 
+    paused = dev.get("paused")
     ok = st.get("ping_ok", False)
-    if ok:
+    if paused:
+        stat_txt = CLR["gray"] + "PAUSIERT (wird nicht geprueft)" + RST
+    elif ok:
         stat_txt = CLR["green"] + "ONLINE ({:.1f} ms)".format(st.get("rtt_ms", 0)) + RST
     else:
         stat_txt = CLR["red"] + "DOWN / nicht erreichbar" + RST
     lines.append(mline("Status:  {}".format(stat_txt)))
+
+    # Zeitangaben (auch bei Pause aus der letzten Messung)
+    since = st.get("since")
+    if since:
+        dur = human_age(time.time() - since)
+        word = "Online seit" if ok else "Offline seit"
+        if paused:
+            word = "Letzter Status"
+        lines.append(mline("{}: {} ({})".format(word, fmt_ts(since), dur)))
+    last_down = st.get("last_down")
+    if last_down:
+        d_age = human_age(time.time() - last_down)
+        lines.append(mline("Zuletzt down: {} (vor {})".format(fmt_ts(last_down), d_age)))
+    else:
+        lines.append(mline("Zuletzt down: -"))
+    last_up = st.get("last_up")
+    if last_up:
+        u_age = human_age(time.time() - last_up)
+        lines.append(mline("Zuletzt up:   {} (vor {})".format(fmt_ts(last_up), u_age)))
+    else:
+        lines.append(mline("Zuletzt up:   -"))
 
     http_p = dev.get("http") or dev.get("port")
     if http_p:
@@ -362,6 +439,11 @@ def build_device_modal(modal, mw):
     lines.append(msep())
     lines.append(mline(CLR["cyan"] + BOLD + "AKTIONEN:" + RST))
     lines.append(mline("  " + CLR["cyan"] + "[r] Ping jetzt wiederholen" + RST))
+    if paused:
+        lines.append(mline("  " + CLR["green"] + "[Space] Pausierung aufheben" + RST))
+    else:
+        lines.append(mline("  " + CLR["yellow"] + "[Space] Pausieren (kein Ping)" + RST))
+    lines.append(mline("  " + CLR["red"] + "[d] Geraet loeschen" + RST))
 
     lines.append(msep())
     if res:
@@ -369,6 +451,68 @@ def build_device_modal(modal, mw):
     else:
         lines.append(mline(CLR["gray"] + "[ESC] oder [q] zum Schliessen" + RST))
 
+    lines.append(mbg + MBOX["bl"] + MBOX["h"] * (mw - 2) + MBOX["br"] + RST)
+    return lines
+
+
+def build_form_modal(modal, mw):
+    """Formular (Geraet anlegen / Intervalle)."""
+    mbg = CLR["modalbg"]
+    mhi = CLR["modalhi"]
+    lines = []
+
+    def mline(content):
+        return mbg + MBOX["v"] + " " + padto(content, mw - 4) + " " + MBOX["v"] + RST
+
+    def msep():
+        return mbg + MBOX["v"] + "\u2500" * (mw - 2) + MBOX["v"] + RST
+
+    lines.append(mbg + MBOX["tl"] + MBOX["h"] * (mw - 2) + MBOX["tr"] + RST)
+    lines.append(mhi + MBOX["v"] + " " + padto(modal.get("title", "EINGABE"), mw - 4)
+                 + " " + MBOX["v"] + RST)
+    lines.append(mbg + MBOX["lt"] + MBOX["h"] * (mw - 2) + MBOX["rt"] + RST)
+
+    for idx, f in enumerate(modal["fields"]):
+        val = f["value"]
+        if f.get("type") == "select":
+            val = "< {} >".format(val if val else "-")
+        cursor = "\u258f" if idx == modal.get("focus") else ""
+        content = " {:<10}{}{}".format(f["label"] + ":", val, cursor)
+        if idx == modal.get("focus"):
+            content = CLR["modalhi"] + padto(content, mw - 4) + RST
+        lines.append(mline(content))
+
+    if modal.get("hint"):
+        lines.append(msep())
+        lines.append(mline(CLR["gray"] + modal["hint"] + RST))
+    if modal.get("error"):
+        lines.append(mline(CLR["red"] + BOLD + modal["error"] + RST))
+    else:
+        lines.append(msep())
+        lines.append(mline(CLR["gray"] + "Tab/\u2191\u2193=Feld  Enter=OK  ESC=abbrechen" + RST))
+
+    lines.append(mbg + MBOX["bl"] + MBOX["h"] * (mw - 2) + MBOX["br"] + RST)
+    return lines
+
+
+def build_confirm_modal(modal, mw):
+    """Ja/Nein-Rueckfrage."""
+    mbg = CLR["modalbg"]
+    mhi = CLR["modalhi"]
+    lines = []
+
+    def mline(content):
+        return mbg + MBOX["v"] + " " + padto(content, mw - 4) + " " + MBOX["v"] + RST
+
+    lines.append(mbg + MBOX["tl"] + MBOX["h"] * (mw - 2) + MBOX["tr"] + RST)
+    lines.append(mhi + MBOX["v"] + " " + padto(modal.get("title", "BESTAETIGEN"), mw - 4)
+                 + " " + MBOX["v"] + RST)
+    lines.append(mbg + MBOX["lt"] + MBOX["h"] * (mw - 2) + MBOX["rt"] + RST)
+    for text in modal.get("text", []):
+        lines.append(mline(text))
+    lines.append(mbg + MBOX["v"] + "\u2500" * (mw - 2) + MBOX["v"] + RST)
+    lines.append(mline(CLR["red"] + BOLD + "[j] Ja" + RST + "    "
+                       + CLR["gray"] + "[n]/[ESC] Abbrechen" + RST))
     lines.append(mbg + MBOX["bl"] + MBOX["h"] * (mw - 2) + MBOX["br"] + RST)
     return lines
 
@@ -385,7 +529,8 @@ def render(w, h, state, prox, speed, frame, active_panel, sel_dev, sel_guest, ms
     total = (state or {}).get("total", 0)
     lc = (state or {}).get("last_check", 0)
     iok = (state or {}).get("internet", False)
-    poll = 15
+    poll = (state or {}).get("poll_interval", 15) or 15
+    paused_n = (state or {}).get("paused", 0)
     ago = int(time.time() - lc) if lc else 999
 
     spin = SPIN[frame % len(SPIN)]
@@ -399,12 +544,16 @@ def render(w, h, state, prox, speed, frame, active_panel, sel_dev, sel_guest, ms
     rows.append(CLR["titlebg"] + BOLD + left + " " * mid + right + RST)
 
     # ─── Row 1: Statuszeile ───
+    isec = (state or {}).get("internet_since")
+    iage = human_age(time.time() - isec) if isec else "-"
     if iok:
-        inet = CLR["green"] + "\u25cf INTERNET ONLINE" + RST
+        inet = CLR["green"] + "\u25cf INTERNET ONLINE" + RST + CLR["dark"] + " " + iage + RST
     else:
-        inet = CLR["red"] + BOLD + "\u25cf INTERNET OFFLINE!" + RST
+        inet = CLR["red"] + BOLD + "\u25cf INTERNET OFFLINE" + RST + CLR["red"] + " " + iage + RST
     oc = CLR["green"] if online == total else (CLR["yellow"] if online else CLR["red"])
     dev_txt = oc + "{}/{} Geraete".format(online, total) + RST
+    if paused_n:
+        dev_txt += CLR["gray"] + " \u23f8{}".format(paused_n) + RST
     if speed and speed.get("ok"):
         sp = "{}\u2193{:.1f}{} / {}\u2191{:.1f}{} Mbps".format(
             CLR["cyan"], speed["download_mbps"], RST,
@@ -461,10 +610,15 @@ def render(w, h, state, prox, speed, frame, active_panel, sel_dev, sel_guest, ms
     # ─── Footer ───
     if msg:
         foot = " " + msg
+    elif modal and modal["type"] == "form":
+        foot = " Tab/\u2191\u2193=Feld wechseln  Enter=naechstes Feld/speichern  ESC=abbrechen"
+    elif modal and modal["type"] == "confirm":
+        foot = " [j] Ja  [n]/[ESC] Nein"
     elif active_panel == 0:
-        foot = " Tab=Proxmox  \u2191\u2193=Waehlen  Enter=Details  r=Ping  q=Beenden"
+        foot = (" Tab=Proxmox  \u2191\u2193=Waehlen  Enter=Details  a=Neu  Space=Pause  "
+                "d=Loeschen  c=Config  r=Ping  q=Ende")
     else:
-        foot = " Tab=Geraete  \u2191\u2193=Waehlen  Enter=Aktions-Modal  s=Start  x=Stop  p=Refresh  q=Beenden"
+        foot = " Tab=Geraete  \u2191\u2193=Waehlen  Enter=Aktions-Modal  s=Start  x=Stop  p=Refresh  c=Config  q=Ende"
     rows.append(CLR["footbg"] + padto(foot, w) + RST)
 
     while len(rows) < h:
@@ -473,11 +627,15 @@ def render(w, h, state, prox, speed, frame, active_panel, sel_dev, sel_guest, ms
 
     # ─── Lightbox Modal Overlay (wenn aktiv) ───
     if modal:
-        mw = min(56, w - 4)
+        mw = min(60, w - 4)
         if modal["type"] == "proxmox":
             mlines = build_proxmox_modal(modal, mw)
-        else:
+        elif modal["type"] == "device":
             mlines = build_device_modal(modal, mw)
+        elif modal["type"] == "form":
+            mlines = build_form_modal(modal, mw)
+        else:
+            mlines = build_confirm_modal(modal, mw)
         mh = len(mlines)
         sx = (w - mw) // 2
         sy = max(2, (h - mh) // 2)
@@ -494,49 +652,64 @@ def build_device_lines(devs, state, w, sel_dev):
     """Geraetegruppen in Sub-Spalten fuer die linke Zone mit Highlight."""
     cfg = CFG
     groups = cfg.get("groups", {})
-    if w >= 96:
-        nc = 3
-    elif w >= 60:
-        nc = 2
-    else:
-        nc = 1
+    nc = 2 if w >= 70 else 1
     gap = 1
     cw = (w - gap * (nc - 1)) // nc
 
     cols = [[] for _ in range(nc)]
     ht = [0] * nc
     global_di = 0
+    now = time.time()
 
     for gid in sorted(groups):
         grp = groups[gid]
         dv = grp.get("devices", [])
         if not dv:
             continue
-        gn = sum(1 for d in dv if devs.get("{}|{}".format(gid, d["name"]), {}).get("ping_ok"))
-        gt = len(dv)
+        active = [d for d in dv if not d.get("paused")]
+        paused_n = len(dv) - len(active)
+        gn = sum(1 for d in active
+                 if devs.get("{}|{}".format(gid, d["name"]), {}).get("ping_ok"))
+        gt = len(active)
         gc = CLR["green"] if gn == gt else (CLR["yellow"] if gn else CLR["red"])
         block = []
         label = grp.get("label", gid)
-        block.append(gc + BOLD + "\u25b8 " + label + RST + gc + " [{}/{}]".format(gn, gt) + RST)
+        head = gc + BOLD + "\u25b8 " + label + RST + gc + " [{}/{}]".format(gn, gt) + RST
+        if paused_n:
+            head += CLR["gray"] + " \u23f8{}".format(paused_n) + RST
+        block.append(head)
         for d in dv:
-            rec = devs.get("{}|{}".format(gid, d["name"]), {})
-            ok = rec.get("ping_ok", False)
-            rt = rec.get("rtt_ms", 0)
-            if ok and rt < 20:
-                ic = CLR["green"] + "\u25cf" + RST
-            elif ok and rt < 100:
-                ic = CLR["yellow"] + "\u25c9" + RST
-            elif ok:
-                ic = CLR["orange"] + "\u25ce" + RST
-            else:
-                ic = CLR["red"] + "\u25cb" + RST
+            rec = devs.get("{}|{}".format(gid, d["name"]), {}) or {}
             nm = d["name"]
-            rts = "{:.0f}ms".format(rt) if ok else (CLR["red"] + "DOWN" + RST)
-            name_w = cw - 10
-            line = " {} {} {}".format(ic, padto(nm, name_w), rts)
+            if d.get("paused"):
+                ic = CLR["gray"] + "\u2016" + RST
+                nm = CLR["dark"] + nm + RST
+                rts_c, rts = CLR["gray"], "PAUSE"
+                age_c, age_s = CLR["dark"], "-"
+            else:
+                ok = rec.get("ping_ok", False)
+                rt = rec.get("rtt_ms", 0) or 0
+                if ok and rt < 20:
+                    ic = CLR["green"] + "\u25cf" + RST
+                elif ok and rt < 100:
+                    ic = CLR["yellow"] + "\u25c9" + RST
+                elif ok:
+                    ic = CLR["orange"] + "\u25ce" + RST
+                else:
+                    ic = CLR["red"] + "\u25cb" + RST
+                if ok:
+                    rts_c, rts = CLR["green"], "{:.0f}ms".format(rt)
+                else:
+                    rts_c, rts = CLR["red"], "DOWN"
+                age_c = CLR["green"] if ok else CLR["red"]
+                age_s = human_age(now - rec["since"]) if rec.get("since") else "-"
+            nm_w = cw - 15
+            cell = (" " + ic + " " + padto(nm, nm_w) + " "
+                    + rts_c + clip(rts, 5).rjust(5) + RST + " "
+                    + age_c + clip(age_s, 5).rjust(5) + RST)
             if global_di == sel_dev:
-                line = hl(line, cw)
-            block.append(line)
+                cell = hl(cell, cw)
+            block.append(cell)
             global_di += 1
         block.append("")
         ci = ht.index(min(ht))
@@ -737,7 +910,9 @@ def guest_action(node_idx, node_name, vmid, gtype, action):
 def handle_input(data, active_panel, sel_dev, sel_guest, num_devs, num_guests, modal):
     """
     Parst beliebige Terminal-Sequenzen vollstaendig und nicht-blockierend.
-    Returns: dict mit 'quit', 'active_panel', 'sel_dev', 'sel_guest', 'action', 'modal_action'
+    Returns: dict mit 'quit', 'active_panel', 'sel_dev', 'sel_guest',
+             'action', 'modal_action', 'open_modal', 'close_modal',
+             'form_submit', 'form_cancel', 'confirm_yes'
     """
     res = {
         "quit": False,
@@ -748,15 +923,84 @@ def handle_input(data, active_panel, sel_dev, sel_guest, num_devs, num_guests, m
         "modal_action": None,
         "open_modal": False,
         "close_modal": False,
+        "form_submit": False,
+        "form_cancel": False,
+        "confirm_yes": False,
     }
 
     max_d = max(0, num_devs - 1)
     max_g = max(0, num_guests - 1)
 
+    def form_field():
+        return modal["fields"][modal.get("focus", 0)]
+
+    def move_focus(step):
+        modal["focus"] = (modal.get("focus", 0) + step) % len(modal["fields"])
+
+    def cycle_select(step):
+        f = form_field()
+        if f.get("type") == "select" and f.get("options"):
+            f["idx"] = (f.get("idx", 0) + step) % len(f["options"])
+            f["value"] = f["options"][f["idx"]][1]
+
     i = 0
     n = len(data)
     while i < n:
         b = data[i]
+
+        # ── Formular-Modus ──
+        if modal and modal.get("type") == "form":
+            f = form_field()
+            if b == 0x1b:                      # ESC / Pfeiltasten
+                if i + 2 < n and data[i + 1] == 0x5b:
+                    code = data[i + 2]
+                    if code == 0x41:
+                        move_focus(-1)
+                    elif code == 0x42:
+                        move_focus(1)
+                    elif code == 0x44:
+                        cycle_select(-1)
+                    elif code == 0x43:
+                        cycle_select(1)
+                    i += 3
+                    continue
+                res["form_cancel"] = True
+                i += 1
+                continue
+            if b in (0x09, 0x0e, 0x0d, 0x0a):  # Tab / Enter
+                if b in (0x0d, 0x0a) and modal.get("focus", 0) == len(modal["fields"]) - 1:
+                    res["form_submit"] = True
+                else:
+                    move_focus(1)
+                i += 1
+                continue
+            if b in (0x7f, 0x08):              # Backspace
+                if f.get("type") == "text" and f.get("value"):
+                    f["value"] = f["value"][:-1]
+                i += 1
+                continue
+            if 32 <= b < 127:
+                ch = chr(b)
+                if f.get("type") == "text":
+                    if len(f.get("value", "")) < f.get("max", 40):
+                        f["value"] = f.get("value", "") + ch
+                elif ch in ("<", "-", "h"):
+                    cycle_select(-1)
+                elif ch in (">", "+", "l"):
+                    cycle_select(1)
+                i += 1
+                continue
+            i += 1
+            continue
+
+        # ── Bestaetigungs-Modus ──
+        if modal and modal.get("type") == "confirm":
+            if b in (0x6a, 0x4a):              # j / J
+                res["confirm_yes"] = True
+            else:
+                res["close_modal"] = True
+            i += 1
+            continue
 
         # ── ESC-Sequenzen ──
         if b == 0x1b:
@@ -822,7 +1066,12 @@ def handle_input(data, active_panel, sel_dev, sel_guest, num_devs, num_guests, m
                 elif c == "4": res["modal_action"] = "stop"
                 elif c == "5": res["modal_action"] = "backup"
             elif modal["type"] == "device":
-                if c in ("r", "R"): res["modal_action"] = "ping"
+                if c in ("r", "R"):
+                    res["modal_action"] = "ping"
+                elif c in ("d", "D"):
+                    res["modal_action"] = "delete"
+                elif b == 0x20:
+                    res["modal_action"] = "pause"
             i += 1
             continue
 
@@ -834,6 +1083,14 @@ def handle_input(data, active_panel, sel_dev, sel_guest, num_devs, num_guests, m
             res["action"] = "ping"
         elif c in ("p", "P"):
             res["action"] = "prox"
+        elif c in ("a", "A"):
+            res["action"] = "add_device"
+        elif c in ("c", "C"):
+            res["action"] = "config"
+        elif c in ("d", "D"):
+            res["action"] = "delete_device"
+        elif b == 0x20:
+            res["action"] = "toggle_pause"
         elif c in ("j",):
             if res["active_panel"] == 0:
                 res["sel_dev"] = min(max_d, res["sel_dev"] + 1)
@@ -871,6 +1128,138 @@ def safe_write(text):
                 data = data[n:]
             except (BlockingIOError, OSError):
                 time.sleep(0.005)
+
+
+# ═══════════════════════════════════════════════════════════════════
+# CONFIG-EDITOR (Geraete + Intervalle)
+# ═══════════════════════════════════════════════════════════════════
+
+def run_checker_now():
+    subprocess.Popen([sys.executable, os.path.join(HERE, "checker.py")],
+                     stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+
+
+def find_device(gid, name):
+    for dev in CFG.get("groups", {}).get(gid, {}).get("devices", []):
+        if dev.get("name") == name:
+            return dev
+    return None
+
+
+def open_add_form():
+    choices = group_choices() or [("eigene", "Eigene")]
+    return {
+        "type": "form",
+        "kind": "add",
+        "title": "NEUES GERAET ANLEGEN",
+        "focus": 0,
+        "error": None,
+        "fields": [
+            {"key": "name", "label": "Name", "type": "text", "value": "", "max": 30},
+            {"key": "ip", "label": "IP/Host", "type": "text", "value": "", "max": 40},
+            {"key": "port", "label": "HTTP-Port", "type": "text", "value": "", "max": 5},
+            {"key": "group", "label": "Gruppe", "type": "select",
+             "value": choices[0][1], "idx": 0, "options": choices},
+        ],
+        "hint": "HTTP-Port optional (nur fuer Web-Check)",
+    }
+
+
+def open_config_form():
+    return {
+        "type": "form",
+        "kind": "config",
+        "title": "INTERVALLE (Performance)",
+        "focus": 0,
+        "error": None,
+        "fields": [
+            {"key": "poll", "label": "Ping (s)", "type": "text",
+             "value": str(CFG.get("poll_interval", 15)), "max": 4},
+            {"key": "speed", "label": "Speed (min)", "type": "text",
+             "value": str(CFG.get("speedtest_interval_min", 30)), "max": 4},
+        ],
+        "hint": "Ping: 5-3600 s   Speedtest: 1-1440 min",
+    }
+
+
+def valid_host(ip):
+    """IPv4 (Oktette 0-255) oder einfacher Hostname."""
+    if re.match(r"^\d+(\.\d+){3}$", ip):
+        return all(0 <= int(o) <= 255 for o in ip.split("."))
+    return bool(re.match(r"^[A-Za-z0-9][A-Za-z0-9.-]{0,62}$", ip))
+
+
+def apply_form(modal):
+    """Validiert und uebernimmt ein Formular. Rueckgabe: (fehler, meldung)."""
+    vals = {f["key"]: f["value"].strip() for f in modal["fields"]}
+    if modal.get("kind") == "add":
+        name = vals.get("name", "")
+        ip = vals.get("ip", "")
+        port = vals.get("port", "")
+        if not name:
+            return "Name fehlt", None
+        if not valid_host(ip):
+            return "IP/Hostname ungueltig", None
+        if port and not port.isdigit():
+            return "HTTP-Port muss eine Zahl sein", None
+        sel = next((f for f in modal["fields"] if f["key"] == "group"), None)
+        if sel and sel.get("options"):
+            gid = sel["options"][sel.get("idx", 0)][0]
+        else:
+            gid = "eigene"
+        grp = CFG.setdefault("groups", {}).setdefault(
+            gid, {"label": gid.replace("_", " ").title(), "devices": []})
+        if find_device(gid, name):
+            return "Name existiert in dieser Gruppe", None
+        dev = {"name": name, "ip": ip, "type": "linux"}
+        if port:
+            dev["http"] = int(port)
+        grp.setdefault("devices", []).append(dev)
+        save_config(CFG)
+        run_checker_now()
+        return None, "{} angelegt ({})".format(name, gid)
+
+    if modal.get("kind") == "config":
+        try:
+            poll = int(vals.get("poll", ""))
+            speed = int(vals.get("speed", ""))
+        except ValueError:
+            return "Bitte Zahlen eingeben", None
+        if not 5 <= poll <= 3600:
+            return "Ping-Intervall: 5-3600 s", None
+        if not 1 <= speed <= 1440:
+            return "Speedtest: 1-1440 min", None
+        CFG["poll_interval"] = poll
+        CFG["speedtest_interval_min"] = speed
+        save_config(CFG)
+        run_checker_now()
+        return None, "Ping alle {}s, Speedtest alle {}min".format(poll, speed)
+
+    return "unbekanntes Formular", None
+
+
+def set_paused(gid, name, paused):
+    dev = find_device(gid, name)
+    if not dev:
+        return False
+    dev["paused"] = paused
+    if not paused:
+        dev.pop("paused", None)
+    save_config(CFG)
+    run_checker_now()
+    return True
+
+
+def delete_device(gid, name):
+    grp = CFG.get("groups", {}).get(gid) or {}
+    devs = grp.get("devices", [])
+    for idx, dev in enumerate(devs):
+        if dev.get("name") == name:
+            devs.pop(idx)
+            save_config(CFG)
+            run_checker_now()
+            return True
+    return False
 
 
 # ═══════════════════════════════════════════════════════════════════
@@ -986,6 +1375,29 @@ def main():
                         "result": None,
                     }
 
+            # Formular abbrechen
+            if inp["form_cancel"]:
+                modal = None
+
+            # Formular absenden
+            if inp["form_submit"] and modal and modal.get("type") == "form":
+                err, okmsg = apply_form(modal)
+                if err:
+                    modal["error"] = err
+                else:
+                    CFG = load(CONFIG) or CFG
+                    modal = None
+                    msg = okmsg
+                    msg_until = time.time() + 3
+
+            # Bestaetigung (Loeschen)
+            if inp["confirm_yes"] and modal and modal.get("type") == "confirm":
+                ok = delete_device(modal["gid"], modal["name"])
+                CFG = load(CONFIG) or CFG
+                msg = "{} geloescht".format(modal["name"]) if ok else "Loeschen fehlgeschlagen"
+                msg_until = time.time() + 3
+                modal = None
+
             # Modal schliessen
             if inp["close_modal"]:
                 modal = None
@@ -1005,6 +1417,23 @@ def main():
                     subprocess.Popen([sys.executable, os.path.join(HERE, "checker.py")],
                                      stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
                     modal["result"] = "Ping gestartet..."
+                elif modal["type"] == "device" and mact == "pause":
+                    gid, nm = modal["gid"], modal["dev"]["name"]
+                    newp = not modal["dev"].get("paused")
+                    if set_paused(gid, nm, newp):
+                        CFG = load(CONFIG) or CFG
+                        msg = "{} {}".format(nm, "pausiert" if newp else "wieder aktiv")
+                        modal = None
+                    msg_until = time.time() + 3
+                elif modal["type"] == "device" and mact == "delete":
+                    modal = {
+                        "type": "confirm",
+                        "gid": modal["gid"],
+                        "name": modal["dev"]["name"],
+                        "title": "GERAET LOESCHEN",
+                        "text": [modal["dev"]["name"],
+                                 "aus Gruppe '{}' entfernen?".format(modal["label"])],
+                    }
 
             # Aktionen ausserhalb des Modals
             act = inp["action"]
@@ -1018,6 +1447,26 @@ def main():
                                  stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
                 msg = "Proxmox-Abfrage gestartet..."
                 msg_until = time.time() + 2
+            elif act == "add_device":
+                modal = open_add_form()
+            elif act == "config":
+                modal = open_config_form()
+            elif act == "delete_device" and active_panel == 0 and dev_items:
+                gid, lbl, d = dev_items[sel_dev]
+                modal = {
+                    "type": "confirm",
+                    "gid": gid,
+                    "name": d["name"],
+                    "title": "GERAET LOESCHEN",
+                    "text": [d["name"], "aus Gruppe '{}' entfernen?".format(lbl)],
+                }
+            elif act == "toggle_pause" and active_panel == 0 and dev_items:
+                gid, lbl, d = dev_items[sel_dev]
+                newp = not d.get("paused")
+                if set_paused(gid, d["name"], newp):
+                    CFG = load(CONFIG) or CFG
+                    msg = "{} {}".format(d["name"], "pausiert" if newp else "wieder aktiv")
+                    msg_until = time.time() + 3
             elif act == "quick_start" and guest_items and active_panel == 1:
                 ni, g = guest_items[sel_guest]
                 node_name = prox["nodes"][ni]["node"]["name"]
