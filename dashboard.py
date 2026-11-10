@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 # -*- coding: utf-8 -*-
 """
-Serverraum Dashboard - Clevo M815P
+Serverraum Dashboard - TUI fuer Netbook (Debian 10) und Raspberry Pi
 Multi-Panel TUI: Ping-Monitoring (links) + Proxmox-Cluster (rechts)
 Mit Lightbox-Modals, Tastaturnavigation, Proxmox Start/Stop/Reboot/Backup.
 
@@ -28,6 +28,44 @@ import tty
 import urllib.error
 import urllib.parse
 import urllib.request
+
+
+def _hostinfo():
+    """Kurze Hardware-/OS-Kennung fuer die Titelleiste (host / SoC / Distro)."""
+    import platform
+    host = platform.node() or "?"
+    cpu = ""
+    try:
+        with open("/proc/cpuinfo") as f:
+            info = f.read().splitlines()
+        model = next((l.split(":", 1)[1].strip() for l in info if l.startswith("Model")), "")
+        name = next((l.split(":", 1)[1].strip() for l in info if l.startswith("model name")), "")
+        cpu = model or name
+        cpu = re.sub(r"\s+Rev\s+\S+.*$", "", cpu)
+        cpu = cpu.replace("Raspberry Pi ", "")
+        cpu = re.sub(r"\((?:R|TM)\)", "", cpu).replace("CPU", "")
+        cpu = re.sub(r"\s+", " ", cpu).strip()
+        cpu = cpu[:22].strip()
+    except Exception:
+        pass
+    osname = ""
+    try:
+        fields = {}
+        with open("/etc/os-release") as f:
+            for line in f:
+                if "=" in line:
+                    k, v = line.strip().split("=", 1)
+                    fields[k] = v.strip().strip('"')
+        osname = fields.get("NAME", "").replace(" GNU/Linux", "")
+        if fields.get("VERSION_ID"):
+            osname = (osname + " " + fields["VERSION_ID"]).strip()
+    except Exception:
+        pass
+    parts = [p for p in (host, cpu or "?", osname or "?") if p]
+    return " / ".join(parts)
+
+
+HOSTINFO = _hostinfo()
 
 HERE = os.path.dirname(os.path.abspath(__file__))
 STATE = os.path.join(HERE, "state.json")
@@ -353,7 +391,7 @@ def render(w, h, state, prox, speed, frame, active_panel, sel_dev, sel_guest, ms
     spin = SPIN[frame % len(SPIN)]
 
     # ─── Row 0: Titelleiste ───
-    title = " SERVERRAUM DASHBOARD  {}  Clevo M815P / Atom N450 / Debian 10 ".format(spin)
+    title = " SERVERRAUM DASHBOARD  {}  {} ".format(spin, HOSTINFO)
     clock = time.strftime("%H:%M:%S ")
     left = title
     right = clock
