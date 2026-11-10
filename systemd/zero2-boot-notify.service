@@ -1,0 +1,14 @@
+[Unit]
+Description=zero2 Boot-Benachrichtigung (Dashboard + Internet)
+After=network-online.target netbook-checker.service getty@tty1.service
+Wants=network-online.target
+# Nach dem Boot einmalig melden, sobald Dashboard laeuft und Internet da ist
+
+[Service]
+Type=oneshot
+ExecStart=/usr/bin/python3 /opt/netbook-dashboard/boot_notify.py
+TimeoutStartSec=240
+RemainAfterExit=yes
+
+[Install]
+WantedBy=multi-user.target

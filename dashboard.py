@@ -550,6 +550,23 @@ def render(w, h, state, prox, speed, frame, active_panel, sel_dev, sel_guest, ms
         inet = CLR["green"] + "\u25cf INTERNET ONLINE" + RST + CLR["dark"] + " " + iage + RST
     else:
         inet = CLR["red"] + BOLD + "\u25cf INTERNET OFFLINE" + RST + CLR["red"] + " " + iage + RST
+
+    # Verbindungsart + IP (und SSID im WLAN) direkt hinter dem Internet-Status.
+    # Bei schmalem Terminal wird schrittweise gekuerzt, damit nichts wegfaellt.
+    ntype = (state or {}).get("net_type") or ""
+    nssid = (state or {}).get("net_ssid") or ""
+    nip = (state or {}).get("net_ip") or ""
+    conn_variants = []
+    if ntype:
+        base = " \u00b7 " + ntype
+        if ntype == "WLAN" and nssid:
+            base += " " + clip(nssid, 20)
+        if nip:
+            conn_variants.append(CLR["blue"] + base + " " + nip + RST)
+        conn_variants.append(CLR["blue"] + base + RST)
+        conn_variants.append(CLR["blue"] + " \u00b7 " + ntype + RST)
+    conn_variants.append("")
+
     oc = CLR["green"] if online == total else (CLR["yellow"] if online else CLR["red"])
     dev_txt = oc + "{}/{} Geraete".format(online, total) + RST
     if paused_n:
@@ -561,8 +578,16 @@ def render(w, h, state, prox, speed, frame, active_panel, sel_dev, sel_guest, ms
     else:
         sp = CLR["dark"] + "Speedtest..." + RST
     cd = 1.0 - (ago / poll if poll else 0)
-    cdbar = bar(cd, 10, CLR["blue"])
-    stat = " {}   {}   {}   next {}".format(inet, dev_txt, sp, cdbar)
+
+    stat = None
+    for conn in conn_variants:
+        head_txt = " {}{}   {}   {}   next ".format(inet, conn, dev_txt, sp)
+        avail = w - vlen(head_txt)
+        if avail >= 3:
+            stat = head_txt + bar(cd, min(10, avail), CLR["blue"])
+            break
+    if stat is None:
+        stat = " {}   {}   {}   next ".format(inet, dev_txt, sp) + bar(cd, 10, CLR["blue"])
     rows.append(padto(stat, w))
 
     # ─── Row 2: obere Trennlinie mit Panel-Beschriftung ───
@@ -1174,7 +1199,7 @@ def open_config_form():
     return {
         "type": "form",
         "kind": "config",
-        "title": "INTERVALLE (Performance)",
+        "title": "INTERVALLE & MELDUNGEN",
         "focus": 0,
         "error": None,
         "fields": [
@@ -1182,8 +1207,12 @@ def open_config_form():
              "value": str(CFG.get("poll_interval", 15)), "max": 4},
             {"key": "speed", "label": "Speed (min)", "type": "text",
              "value": str(CFG.get("speedtest_interval_min", 30)), "max": 4},
+            {"key": "offline", "label": "Offline ab", "type": "text",
+             "value": str(CFG.get("offline_after", 3)), "max": 2},
+            {"key": "online", "label": "Online ab", "type": "text",
+             "value": str(CFG.get("online_after", 2)), "max": 2},
         ],
-        "hint": "Ping: 5-3600 s   Speedtest: 1-1440 min",
+        "hint": "Ping 5-3600 s | Speed 1-1440 min | Offline/Online ab = Fehlversuche bzw. Erfolge in Folge (1-20)",
     }
 
 
@@ -1228,17 +1257,26 @@ def apply_form(modal):
         try:
             poll = int(vals.get("poll", ""))
             speed = int(vals.get("speed", ""))
+            off = int(vals.get("offline", "3"))
+            on = int(vals.get("online", "2"))
         except ValueError:
             return "Bitte Zahlen eingeben", None
         if not 5 <= poll <= 3600:
             return "Ping-Intervall: 5-3600 s", None
         if not 1 <= speed <= 1440:
             return "Speedtest: 1-1440 min", None
+        if not 1 <= off <= 20:
+            return "Offline ab: 1-20 Fehlversuche", None
+        if not 1 <= on <= 20:
+            return "Online ab: 1-20 Erfolge", None
         CFG["poll_interval"] = poll
         CFG["speedtest_interval_min"] = speed
+        CFG["offline_after"] = off
+        CFG["online_after"] = on
         save_config(CFG)
         run_checker_now()
-        return None, "Ping alle {}s, Speedtest alle {}min".format(poll, speed)
+        return None, "Ping {}s, Speed {}min, offline ab {}, online ab {}".format(
+            poll, speed, off, on)
 
     return "unbekanntes Formular", None
 

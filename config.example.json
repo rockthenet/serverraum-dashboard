@@ -3,6 +3,8 @@
   "fping_timeout": 800,
   "http_timeout": 3,
   "speedtest_interval_min": 30,
+  "offline_after": 3,
+  "online_after": 2,
   "groups": {
     "proxmox": {
       "label": "Proxmox / Virtualisierung",

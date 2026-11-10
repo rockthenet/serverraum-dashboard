@@ -1,0 +1,19 @@
+#!/bin/sh
+# Serverraum-Dashboard im Terminal starten.
+# Aufruf:  dashboard
+DIR=/opt/netbook-dashboard
+
+if [ ! -f "$DIR/dashboard.py" ]; then
+    echo "Dashboard nicht gefunden: $DIR/dashboard.py" >&2
+    exit 1
+fi
+
+if [ ! -t 0 ] || [ ! -t 1 ]; then
+    echo "Bitte in einem Terminal starten (direkt an der Konsole oder per ssh -t)." >&2
+    exit 1
+fi
+
+cd "$DIR" || exit 1
+: "${TERM:=linux}"
+export TERM
+exec /usr/bin/python3 dashboard.py "$@"

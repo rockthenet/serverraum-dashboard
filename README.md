@@ -7,7 +7,7 @@ remote per SSH erreichbar.
 Zeigt in einem mehrspaltigen ASCII-Layout:
 
 - **Erreichbarkeit** aller Netzwerk-Geräte (Ping + optionaler HTTP-Check), gruppiert
-- **Internet-Status** + regelmäßiger **Speedtest** (Down/Up)
+- **Internet-Status** inkl. Verbindungsart (LAN/WLAN, IP, SSID) + regelmäßiger **Speedtest** (Down/Up)
 - **Proxmox-Panel**: beide PVE-Nodes mit CPU/RAM/Disk-Auslastung und allen
   VMs/Containern inkl. RAM-Nutzung - Start/Stop direkt aus dem Dashboard
 - **Verwaltung im TUI**: Geräte anlegen / pausieren / löschen, Intervalle
@@ -34,6 +34,9 @@ Nur **Python 3 stdlib + `fping`** — kein pip, kein venv, kein Framework.
 | `proxmox.py`       | Fragt PVE-API ab (Nodes, VMs, CTs) → `proxmox.json`         |
 | `speedtest.py`     | Minimaler Down/Up-Speedtest → `speed.json`                  |
 | `checker_loop.sh`  | Hintergrund-Loop: Ping/Proxmox/Speedtest nach `config.json`  |
+| `boot_notify.py`   | Meldet nach dem Boot per ntfy, sobald Dashboard + Internet laufen |
+| `notify.py`        | ntfy-Versand (Topic aus `config.json`)                      |
+| `bin/dashboard`    | Shell-Befehl `dashboard` zum Starten der TUI                |
 | `config.json`      | Geräteliste + Proxmox-Zugangsdaten + Intervalle (**nicht im Repo**) |
 
 ## Steuerung
@@ -46,7 +49,7 @@ Nur **Python 3 stdlib + `fping`** — kein pip, kein venv, kein Framework.
 | `a`                  | **Geraet anlegen** (Name, IP/Host, optional HTTP-Port, Gruppe) |
 | `Space`              | **Geraet pausieren / wieder aktivieren** (kein Ping, zaehlt nicht mit) |
 | `d`                  | **Geraet loeschen** (mit Rueckfrage)                  |
-| `c`                  | **Intervalle einstellen** (Ping, Speedtest)           |
+| `c`                  | **Intervalle + Meldungen einstellen** (Ping, Speedtest, Offline/Online ab) |
 | `1`..`5`             | Im Proxmox-Modal: Start / Shutdown / Reboot / Reset / Backup |
 | `q` / `ESC`          | Modal schliessen (wenn offen) bzw. **Dashboard beenden** (zu Bash) |
 | `s` / `x`            | Quick-Start / Quick-Stop fuer gewaehlten Proxmox-Guest |
@@ -90,9 +93,85 @@ In `config.json` (oder bequem per `c` im Dashboard):
 | `poll_interval` | 15 | Sekunden zwischen Ping-Runden (`fping`, 1 Paket/Host) |
 | `speedtest_interval_min` | 30 | Minuten zwischen Speedtests (~500 KB pro Lauf) |
 | `fping_timeout` | 800 | ms pro Host |
+| `offline_after` | 3 | Fehlversuche in Folge, bis „Internet offline“ gilt |
+| `online_after` | 2 | Erfolge in Folge, bis „wieder online“ gilt |
 
 `checker_loop.sh` liest die Werte vor jedem Durchlauf - Aenderungen greifen
 sofort, ohne Dienst-Neustart. Proxmox wird weiterhin alle 30 s abgefragt.
+
+## Internet-Meldungen (entprellt)
+
+Ein einzelner verlorener Ping loest **keine** Meldung mehr aus:
+
+- „offline“ gilt erst nach `offline_after` Fehlversuchen in Folge (Standard 3,
+  bei 15 s also ~45 s)
+- „wieder online“ gilt erst nach `online_after` Erfolgen in Folge (Standard 2)
+- gemeldet wird nur ein echter Zustandswechsel, inkl. Ausfalldauer und
+  Verbindungsart (z. B. `WLAN 'WITZ!Box2' 192.168.178.67`)
+- `checker.py` sperrt sich per `flock` gegen parallele Laeufe (verhinderte
+  doppelte Meldungen)
+- nach einem Neustart wird **nicht** sofort „wieder online“ gemeldet - das
+  uebernimmt die Boot-Benachrichtigung
+
+Der Rohwert der letzten Messung steht als `internet_raw` in `state.json`,
+der entprellte Wert als `internet`.
+
+## Verbindungsart im Kopf
+
+Die Statuszeile zeigt hinter dem Internet-Status das aktive Interface:
+
+```
+● INTERNET ONLINE 2h · WLAN WITZ!Box2 192.168.178.67  36/40 Geraete ...
+● INTERNET ONLINE 5d · LAN 192.168.178.20             12/12 Geraete ...
+```
+
+Ermittelt wird das Default-Route-Interface (`/proc/net/route`), die IP per
+ioctl und die SSID ueber `iwgetid` (Fallback `nmcli`).
+
+## Boot-Benachrichtigung
+
+`boot_notify.py` (systemd-Unit `systemd/zero2-boot-notify.service`) wartet nach
+dem Boot maximal 180 s, bis
+
+1. `state.json` frisch ist (Checker laeuft),
+2. `internet` true ist,
+3. der `dashboard.py`-Prozess laeuft (Dashboard geladen ist),
+
+und schickt dann **eine** ntfy-Nachricht mit Hostname, Verbindungsart, IP,
+Ladezeit des Dashboards und Geraete-Status. Pro Boot wird das ueber
+`/proc/sys/kernel/random/boot_id` nur einmal gesendet.
+
+Die alte `ntfy-boot.service` (starrer 10-s-curl) wird dadurch ersetzt und
+sollte deaktiviert werden:
+
+```bash
+sudo systemctl disable --now ntfy-boot.service
+sudo cp systemd/zero2-boot-notify.service /etc/systemd/system/
+sudo systemctl enable --now zero2-boot-notify.service
+```
+
+## Dashboard-Befehl
+
+```bash
+sudo install -m 755 bin/dashboard /usr/local/bin/dashboard
+```
+
+Danach startet `dashboard` die TUI von jeder Konsole aus (beendet mit `q`).
+Der alte Alias `dash` kann als `alias dash='dashboard'` weiterlaufen.
+
+## Bildschirm-Standby (Strom sparen)
+
+Der Kernel blankt die Textkonsole nach Inaktivitaet und weckt sie per
+Tastendruck wieder auf:
+
+```bash
+# /boot/firmware/cmdline.txt: consoleblank=0 entfernen, consoleblank=300 = 5 min
+sudo sed -i 's/ *consoleblank=[0-9]*//g; s/$/ consoleblank=300/' /boot/firmware/cmdline.txt
+sudo reboot
+```
+
+Pruefen: `cat /proc/cmdline` (enthaelt `consoleblank=300`) und
+`cat /sys/module/kernel/parameters/consoleblank`.
 
 ## Statusdauer
 
@@ -114,6 +193,7 @@ git clone https://github.com/rockthenet/serverraum-dashboard.git
 cd serverraum-dashboard
 sudo mkdir -p /opt/netbook-dashboard
 sudo cp *.py *.sh /opt/netbook-dashboard/
+sudo install -m 755 bin/dashboard /usr/local/bin/dashboard
 cp config.example.json /opt/netbook-dashboard/config.json
 # config.json anpassen: Geräte + Proxmox-Tokens eintragen
 ```
@@ -164,7 +244,7 @@ if [ "$(tty)" = "/dev/tty1" ]; then
 fi
 ```
 
-*(Wichtig: **kein** `exec`, damit `q` sauber zur Bash-Shell beendet. In `~/.bashrc` kann ein Alias `alias dash='python3 /opt/netbook-dashboard/dashboard.py'` angelegt werden).*
+*(Wichtig: **kein** `exec`, damit `q` sauber zur Bash-Shell beendet. Zum erneuten Starten genügt `dashboard`.)*
 
 Datensammler als systemd-Service (`systemd/netbook-checker.service`):
 
