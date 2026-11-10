@@ -12,6 +12,10 @@ Zeigt in einem mehrspaltigen ASCII-Layout:
   VMs/Containern inkl. RAM-Nutzung und Uptime je Gast - Start/Stop direkt aus dem Dashboard
 - **UniFi-Block** unter dem Proxmox-Panel: Status der Access Points; Klick auf
   einen AP zeigt dessen WLAN-Geräte mehrspaltig im Lightbox-Modal
+- **deCONZ/Phoscon-Block**: Anzahl aller Zigbee-Geräte; Klick bzw. `Enter`
+  zeigt die Geräte nach Typ gruppiert mit online/offline
+- **Freie Pfeilnavigation**: ↑/↓/←/→ springen räumlich zum nächsten Element
+  (Geräte-Subspalten, Proxmox-Guests, APs, deCONZ)
 - **Verwaltung im TUI**: Geräte anlegen / pausieren / löschen, Intervalle
   für Ping und Speedtest einstellen, Statusdauer je Gerät
 - **ntfy-Meldungen pro Gerät**: auf Wunsch bei DOWN, UP oder beidem
@@ -37,21 +41,22 @@ Nur **Python 3 stdlib + `fping`** — kein pip, kein venv, kein Framework.
 | `checker.py`       | Ping- + HTTP-Check aller Geräte → `state.json`              |
 | `proxmox.py`       | Fragt PVE-API ab (Nodes, VMs, CTs) → `proxmox.json`         |
 | `unifi.py`         | Fragt UniFi-Controller ab (APs, WLAN-Clients) → `unifi.json` |
+| `deconz.py`        | Fragt deCONZ/Phoscon ab (Lights, Sensoren) → `deconz.json`  |
 | `speedtest.py`     | Minimaler Down/Up-Speedtest → `speed.json`                  |
-| `checker_loop.sh`  | Hintergrund-Loop: Ping/Proxmox/UniFi/Speedtest nach `config.json` |
+| `checker_loop.sh`  | Hintergrund-Loop: Ping/Proxmox/UniFi/deCONZ/Speedtest nach `config.json` |
 | `boot_notify.py`   | Meldet nach dem Boot per ntfy, sobald Dashboard + Internet laufen |
 | `notify.py`        | ntfy-Versand (Topic aus `config.json`)                      |
 | `bin/dashboard`    | Shell-Befehl `dashboard` zum Starten der TUI                |
-| `config.json`      | Geräteliste + Proxmox-/UniFi-Zugangsdaten + Intervalle (**nicht im Repo**) |
+| `config.json`      | Geräteliste + Proxmox-/UniFi-/deCONZ-Zugangsdaten + Intervalle (**nicht im Repo**) |
 
 ## Steuerung
 
 | Taste                | Aktion                                                |
 |----------------------|-------------------------------------------------------|
-| `Tab` / `←`/`→`, `h`/`l` | Panel wechseln (**Geraete** → **Proxmox** → **UniFi**) |
-| `↑`/`↓`, `j`/`k`     | Element im aktiven Panel auswaehlen                   |
+| `Tab`                | Panel wechseln (**Geraete** → **Proxmox** → **UniFi** → **deCONZ**) |
+| `↑`/`↓`/`←`/`→`, `j`/`k`/`h`/`l` | **Frei räumlich** zum nächsten Element in der Richtung (Geräte-Subspalten, Guests, APs, deCONZ) |
 | `Enter`              | **Lightbox-Modal oeffnen** (Aktionen & Details)       |
-| Mausklick            | Auf eine AP-Zeile: **Geraete dieses APs** anzeigen    |
+| Mausklick            | Auf eine AP-Zeile: **Geraete dieses APs** anzeigen; auf den deCONZ-Block: **Typ-Übersicht** |
 | `a`                  | **Geraet anlegen** (Name, IP/Host, optional HTTP-Port, Gruppe) |
 | `Space`              | **Geraet pausieren / wieder aktivieren** (kein Ping, zaehlt nicht mit) |
 | `d`                  | **Geraet loeschen** (mit Rueckfrage)                  |
@@ -277,6 +282,59 @@ Zugang in `config.json` (Modus 600, **nicht ins Repo**):
 automatisch `/api/auth/login` + `/proxy/network` verwendet. Abgefragt werden
 `stat/device` (APs), `stat/sta` (Clients) und `stat/health`.
 
+## deCONZ-Block
+
+Unter dem UniFi-Block steht ein kompakter deCONZ-/Phoscon-Block. Im
+Hauptbildschirm zeigt er **nur die Anzahl** aller Zigbee-Geräte:
+
+```
+⬡ deCONZ  104 Geraete
+```
+
+- Farbe: grün = alle verbunden, gelb = einzelne offline, rot = keine Verbindung
+- **Klick auf den Block** (oder `Tab` bis `PROXMOX + UNIFI`, dann `↓` bis
+  deCONZ und `Enter`) öffnet die Detailübersicht
+- Ist das Gateway nicht erreichbar, bleiben die letzten Zahlen sichtbar
+  (`nicht erreichbar (Daten vor …)`)
+
+### deCONZ-Modal (nach Typ gruppiert)
+
+```
+╔════════════════════════════════════════════════════════════════════╗
+║ DECONZ / PHOSCON: Phoscon-GW                                       ║
+╠════════════════════════════════════════════════════════════════════╣
+║ 104 Geraete   91 verbunden  ·  13 offline (16 Typen)               ║
+║ Gateway 2.32.1 · Firmware 0x26780700 · Kanal 20                    ║
+║────────────────────────────────────────────────────────────────────║
+║ TYP                                           GES  ONLINE OFFLINE  ║
+║ ▸ Bewegung/Praesenz                             15      14       1 ║
+║ ▸ Steckdose                                     18      15       3 ║
+║ ...                                                                ║
+╚════════════════════════════════════════════════════════════════════╝
+```
+
+- gezählt werden deCONZ-`lights` und `sensors`
+- „verbunden“ kommt aus `state.reachable` (Lights) bzw. `config.reachable`
+  (Sensoren); virtuelle Einträge (`Daylight`, `CLIPDaylightOffset`) gelten als
+  verbunden
+- mehrere Roh-Typen werden zu lesbaren Gruppen zusammengefasst, z. B.
+  `On/Off plug-in unit` + `Smart plug` → **Steckdose**
+- bei wenig Platz: `+N weitere Typen`
+
+Zugang in `config.json` (Modus 600, **nicht ins Repo**):
+
+```json
+"deconz_interval_sec": 60,
+"deconz": {
+  "url": "http://192.168.178.247",
+  "apikey": "…",
+  "timeout": 6
+}
+```
+
+Den API-Key legt man in Phoscon unter *Einstellungen → Gateway → API-Schlüssel*
+an (oder nutzt einen vorhandenen). Abgefragt wird `<url>/api/<apikey>/`.
+
 ## Statusdauer
 
 `checker.py` schreibt pro Geraet `since`, `last_down` und `last_up` in
@@ -299,7 +357,7 @@ sudo mkdir -p /opt/netbook-dashboard
 sudo cp *.py *.sh /opt/netbook-dashboard/
 sudo install -m 755 bin/dashboard /usr/local/bin/dashboard
 cp config.example.json /opt/netbook-dashboard/config.json
-# config.json anpassen: Geräte + Proxmox-Tokens + UniFi-Zugang eintragen
+# config.json anpassen: Geräte + Proxmox-Tokens + UniFi-/deCONZ-Zugang eintragen
 ```
 
 ### Proxmox-Token erzeugen

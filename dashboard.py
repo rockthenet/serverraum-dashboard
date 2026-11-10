@@ -81,6 +81,7 @@ STATE = os.path.join(HERE, "state.json")
 PROX = os.path.join(HERE, "proxmox.json")
 SPEED = os.path.join(HERE, "speed.json")
 UNI = os.path.join(HERE, "unifi.json")
+DECONZ = os.path.join(HERE, "deconz.json")
 CONFIG = os.path.join(HERE, "config.json")
 
 # ─── ANSI ───
@@ -646,7 +647,8 @@ def build_unifi_modal(modal, mw, max_rows=None):
 LAST_LAYOUT = {}
 
 
-def render(w, h, state, prox, speed, uni, frame, active_panel, sel_dev, sel_guest, sel_ap, msg, modal):
+def render(w, h, state, prox, speed, uni, dc, frame, active_panel,
+           sel_dev, sel_guest, sel_ap, sel_dc, msg, modal):
     """Baut den kompletten Screen (inkl. evtl. Modal-Overlay)."""
     rows = []
     devs = (state or {}).get("devices", {})
@@ -740,7 +742,7 @@ def render(w, h, state, prox, speed, uni, frame, active_panel, sel_dev, sel_gues
         r_hdr = " PROXMOX CLUSTER [AKTIV] "
         l_border = CLR["dark"]
         r_border = CLR["cyan"] + BOLD
-    else:
+    elif active_panel in (2, 3):
         l_hdr = " GERAETE "
         r_hdr = " PROXMOX + UNIFI [AKTIV] "
         l_border = CLR["dark"]
@@ -758,20 +760,56 @@ def render(w, h, state, prox, speed, uni, frame, active_panel, sel_dev, sel_gues
 
     # ─── Body ───
     body_h = max(1, h - 5)
-    left_lines = build_device_lines(devs, state, LW, sel_dev if active_panel == 0 else -1)
-    prox_lines = build_proxmox_lines(prox, RW, sel_guest if active_panel == 1 else -1)
+    dev_hits = []
+    left_lines = build_device_lines(devs, state, LW,
+                                    sel_dev if active_panel == 0 else -1,
+                                    dev_hits)
+    prox_hits = []
+    prox_lines = build_proxmox_lines(prox, RW,
+                                     sel_guest if active_panel == 1 else -1,
+                                     prox_hits)
     right_lines = list(prox_lines)
     rest = max(0, body_h - len(right_lines))
     uni_hits = []
+    uni_len = 0
     if rest > 0:
-        right_lines += build_unifi_lines(
-            uni, RW, rest,
+        reserve = 1 if (dc and rest >= 5) else 0
+        uni_max = max(1, rest - reserve) if reserve else rest
+        uni_lines = build_unifi_lines(
+            uni, RW, uni_max,
             sel_ap if active_panel == 2 else -1, uni_hits)
+        right_lines += uni_lines
+        uni_len = len(uni_lines)
+        rest = max(0, rest - uni_len)
+    dc_hits = []
+    if dc and rest > 0:
+        right_lines += build_deconz_lines(
+            dc, RW, rest, active_panel == 3, dc_hits)
 
-    # Klick-Ziele fuer die AP-Zeilen merken (Maus)
+    # Selektierbare Zeilen als 2D-Layout merken (Pfeilnavigation + Maus)
+    nc_dev = 2 if LW >= 70 else 1
+    cw_dev = (LW - (nc_dev - 1)) // nc_dev
+    items = []
+    for r, di, ci in dev_hits:
+        items.append({"panel": 0, "idx": di, "row": 3 + r,
+                      "col": 1 + ci * (cw_dev + 1) + cw_dev // 2})
+    for r, gi in prox_hits:
+        items.append({"panel": 1, "idx": gi, "row": 3 + r,
+                      "col": LW + 2 + RW // 2})
+    for off, ai in uni_hits:
+        items.append({"panel": 2, "idx": ai, "row": 3 + len(prox_lines) + off,
+                      "col": LW + 2 + RW // 2})
+    if dc_hits:
+        items.append({"panel": 3, "idx": 0,
+                      "row": 3 + len(prox_lines) + uni_len + dc_hits[0],
+                      "col": LW + 2 + RW // 2})
+
     global LAST_LAYOUT
     LAST_LAYOUT = {
         "ap_hits": [(3 + len(prox_lines) + off, ai) for off, ai in uni_hits],
+        "dc_hit": ((3 + len(prox_lines) + uni_len + dc_hits[0])
+                   if dc_hits else None),
+        "items": items,
         "x0": LW + 2,
         "x1": LW + 2 + RW - 1,
     }
@@ -800,6 +838,9 @@ def render(w, h, state, prox, speed, uni, frame, active_panel, sel_dev, sel_gues
     elif active_panel == 2:
         foot = (" Tab=Geraete  \u2191\u2193=AP waehlen  Enter=Geraete am AP  "
                 "c=Config  q=Ende")
+    elif active_panel == 3:
+        foot = (" Tab=Geraete  \u2191\u2193\u2190\u2192=frei wechseln  Enter=deCONZ-Details  "
+                "c=Config  q=Ende")
     else:
         foot = " Tab=Geraete/UniFi  \u2191\u2193=Waehlen  Enter=Aktions-Modal  s=Start  x=Stop  p=Refresh  c=Config  q=Ende"
     rows.append(CLR["footbg"] + padto(foot, w) + RST)
@@ -814,15 +855,19 @@ def render(w, h, state, prox, speed, uni, frame, active_panel, sel_dev, sel_gues
             mw = min(120, w - 4)
             mlines = build_unifi_modal(modal, mw, max(8, h - 4))
         else:
-            mw = min(60, w - 4)
-            if modal["type"] == "proxmox":
-                mlines = build_proxmox_modal(modal, mw)
-            elif modal["type"] == "device":
-                mlines = build_device_modal(modal, mw)
-            elif modal["type"] == "form":
-                mlines = build_form_modal(modal, mw)
+            if modal["type"] == "deconz":
+                mw = min(70, w - 4)
+                mlines = build_deconz_modal(modal, mw, max(8, h - 4))
             else:
-                mlines = build_confirm_modal(modal, mw)
+                mw = min(60, w - 4)
+                if modal["type"] == "proxmox":
+                    mlines = build_proxmox_modal(modal, mw)
+                elif modal["type"] == "device":
+                    mlines = build_device_modal(modal, mw)
+                elif modal["type"] == "form":
+                    mlines = build_form_modal(modal, mw)
+                else:
+                    mlines = build_confirm_modal(modal, mw)
         mh = len(mlines)
         sx = (w - mw) // 2
         sy = max(2, (h - mh) // 2)
@@ -835,7 +880,7 @@ def render(w, h, state, prox, speed, uni, frame, active_panel, sel_dev, sel_gues
     return rows
 
 
-def build_device_lines(devs, state, w, sel_dev):
+def build_device_lines(devs, state, w, sel_dev, hit_rows=None):
     """Geraetegruppen in Sub-Spalten fuer die linke Zone mit Highlight."""
     cfg = CFG
     groups = cfg.get("groups", {})
@@ -860,6 +905,7 @@ def build_device_lines(devs, state, w, sel_dev):
         gt = len(active)
         gc = CLR["green"] if gn == gt else (CLR["yellow"] if gn else CLR["red"])
         block = []
+        dev_cells = []
         label = grp.get("label", gid)
         head = gc + BOLD + "\u25b8 " + label + RST + gc + " [{}/{}]".format(gn, gt) + RST
         if paused_n:
@@ -898,10 +944,14 @@ def build_device_lines(devs, state, w, sel_dev):
                     + age_c + clip(age_s, 5).rjust(5) + RST)
             if global_di == sel_dev:
                 cell = hl(cell, cw)
+            dev_cells.append((len(block), global_di))
             block.append(cell)
             global_di += 1
         block.append("")
         ci = ht.index(min(ht))
+        if hit_rows is not None:
+            for off, di in dev_cells:
+                hit_rows.append((len(cols[ci]) + off, di, ci))
         cols[ci].extend(block)
         ht[ci] += len(block)
 
@@ -916,7 +966,7 @@ def build_device_lines(devs, state, w, sel_dev):
     return out
 
 
-def build_proxmox_lines(prox, w, sel_guest):
+def build_proxmox_lines(prox, w, sel_guest, hit_rows=None):
     """Proxmox-Panel: Nodes + Guests mit RAM-Bars und sauberem Highlight."""
     out = []
     if not prox or not prox.get("nodes"):
@@ -980,6 +1030,8 @@ def build_proxmox_lines(prox, w, sel_guest):
                 line = clip(line, w)
             if sel:
                 line = hl(line, w)
+            if hit_rows is not None:
+                hit_rows.append((len(out), gi))
             out.append(line)
             gi += 1
         out.append("")
@@ -1105,6 +1157,138 @@ def open_unifi_modal(uni, ap_index):
     return {"type": "unifi", "ap": ap, "clients": clients}
 
 
+def _deconz_counts(dc):
+    total = int(dc.get("total") or 0)
+    online = int(dc.get("online") or 0)
+    offline = int(dc.get("offline") if dc.get("offline") is not None
+                  else total - online)
+    return total, online, offline
+
+
+def build_deconz_lines(dc, w, max_lines, sel=False, hit_rows=None):
+    """Kompakter deCONZ-Block: im Hauptbildschirm nur die Anzahl."""
+    out = []
+    if not dc:
+        out.append(CLR["dark"] + " \u2b21 deCONZ: keine Daten" + RST)
+        return out
+
+    total, online, offline = _deconz_counts(dc)
+    if not dc.get("ok"):
+        age = human_age(time.time() - (dc.get("ts") or 0))
+        line = (CLR["red"] + " \u2b21 deCONZ  nicht erreichbar" + RST
+                + CLR["dark"] + " (Daten vor {})".format(age) + RST)
+    else:
+        if total and offline == 0:
+            hc = CLR["green"]
+        elif online:
+            hc = CLR["yellow"]
+        else:
+            hc = CLR["red"]
+        line = "{}\u2b21 {}{}deCONZ{}  {} Geraete".format(
+            hc, BOLD, hc, RST, total)
+    if sel:
+        line = hl(line, w)
+    if hit_rows is not None:
+        hit_rows.append(0)
+    out.append(line)
+    return out[:max_lines] if max_lines is not None else out
+
+
+def open_deconz_modal(dc):
+    """Baut das deCONZ-Modal (Geraete nach Typ gruppiert)."""
+    if not dc:
+        return None
+    return {"type": "deconz", "data": dc}
+
+
+def build_deconz_modal(modal, mw, max_rows=None):
+    """deCONZ-Modal: Anzahl je Geraetetyp, online/offline."""
+    dc = modal.get("data") or {}
+    groups = list(dc.get("groups") or [])
+
+    mbg = CLR["modalbg"]
+    mhi = CLR["modalhi"]
+
+    def mline(content):
+        return mbg + MBOX["v"] + " " + padto(content, mw - 4) + " " + MBOX["v"] + RST
+
+    def msep(char="\u2500"):
+        return mbg + MBOX["v"] + char * (mw - 2) + MBOX["v"] + RST
+
+    lines = []
+    lines.append(mbg + MBOX["tl"] + MBOX["h"] * (mw - 2) + MBOX["tr"] + RST)
+
+    gw = dc.get("gateway") or "deCONZ"
+    title = "DECONZ / PHOSCON: {}".format(gw)
+    lines.append(mhi + MBOX["v"] + " " + padto(clip(title, mw - 4), mw - 4)
+                  + " " + MBOX["v"] + RST)
+    lines.append(mbg + MBOX["lt"] + MBOX["h"] * (mw - 2) + MBOX["rt"] + RST)
+
+    total, online, offline = _deconz_counts(dc)
+    stat = (CLR["green"] + BOLD + "{} verbunden".format(online) + RST
+            + CLR["gray"] + "  \u00b7  " + RST
+            + (CLR["red"] if offline else CLR["gray"])
+            + "{} offline".format(offline) + RST)
+    lines.append(mline("{} Geraete   {} {}".format(
+        total, stat, CLR["dark"] + "({} Typen)".format(len(groups)) + RST)))
+
+    if not dc.get("ok"):
+        age = human_age(time.time() - (dc.get("ts") or 0))
+        lines.append(mline(CLR["red"] + "Gateway nicht erreichbar"
+                           + CLR["dark"] + " (Daten vor {})".format(age) + RST))
+    else:
+        fw = dc.get("fwversion") or "-"
+        sw = dc.get("swversion") or "-"
+        ch = dc.get("zigbeechannel")
+        extra = "Gateway {} \u00b7 Firmware {}".format(sw, fw)
+        if ch:
+            extra += " \u00b7 Kanal {}".format(ch)
+        lines.append(mline(CLR["dark"] + clip(extra, mw - 4) + RST))
+
+    lines.append(msep())
+    inner = mw - 4
+    num_w = 21
+    label_w = max(8, inner - num_w - 1)
+    hdr = (padto("TYP", label_w)
+           + "{:>5} {:>7} {:>7}".format("GES", "ONLINE", "OFFLINE"))
+    lines.append(mline(CLR["cyan"] + BOLD + hdr + RST))
+
+    budget = None
+    if max_rows is not None:
+        # Platz fuer Rahmen, Fusszeile und ggf. "+N weitere Typen"
+        budget = max(0, max_rows - len(lines) - 4)
+    shown = 0
+    for grp in groups:
+        if budget is not None and shown >= budget:
+            break
+        total_g = int(grp.get("total") or 0)
+        on_g = int(grp.get("online") or 0)
+        off_g = int(grp.get("offline") if grp.get("offline") is not None
+                    else total_g - on_g)
+        gc = CLR["green"] if off_g == 0 else (CLR["yellow"] if on_g else CLR["red"])
+        label = grp.get("label") or grp.get("type") or "?"
+        if grp.get("virtual"):
+            label = label.replace(" (virtuell)", "")
+        mark = gc + "\u25b8" + RST + " "
+        label_cell = padto(clip(label, label_w - 2), label_w - 2)
+        row = (mark + label_cell + " "
+               + "{:>5}".format(total_g)
+               + " " + CLR["green"] + "{:>7}".format(on_g) + RST
+               + " " + (CLR["red"] if off_g else CLR["dark"])
+               + "{:>7}".format(off_g) + RST)
+        lines.append(mline(row))
+        shown += 1
+
+    if shown < len(groups):
+        lines.append(mline(CLR["dark"] + "+{} weitere Typen".format(
+            len(groups) - shown) + RST))
+
+    lines.append(msep())
+    lines.append(mline(CLR["gray"] + "[ESC] oder [q] schliessen" + RST))
+    lines.append(mbg + MBOX["bl"] + MBOX["h"] * (mw - 2) + MBOX["br"] + RST)
+    return lines
+
+
 # ═══════════════════════════════════════════════════════════════════
 # PROXMOX ACTIONS
 # ═══════════════════════════════════════════════════════════════════
@@ -1226,12 +1410,60 @@ def guest_action(node_idx, node_name, vmid, gtype, action):
 # INPUT-PARSER (ROBUST & NON-BLOCKING)
 # ═══════════════════════════════════════════════════════════════════
 
-def handle_input(data, active_panel, sel_dev, sel_guest, sel_ap,
-                 num_devs, num_guests, num_aps, modal):
+def _selection(panel, sel_dev, sel_guest, sel_ap, sel_dc):
+    return {0: sel_dev, 1: sel_guest, 2: sel_ap, 3: sel_dc}.get(panel, 0)
+
+
+def spatial_target(panel, sel_dev, sel_guest, sel_ap, sel_dc, key):
+    """Naechstes selektierbares Element in Pfeilrichtung (2D, frei)."""
+    items = LAST_LAYOUT.get("items") or []
+    if not items:
+        return None
+    cur = None
+    idx = _selection(panel, sel_dev, sel_guest, sel_ap, sel_dc)
+    for it in items:
+        if it["panel"] == panel and it["idx"] == idx:
+            cur = it
+            break
+    if cur is None:
+        for it in items:
+            if it["panel"] == panel:
+                cur = it
+                break
+    if cur is None:
+        return None
+
+    dx, dy = {"left": (-1, 0), "right": (1, 0),
+              "up": (0, -1), "down": (0, 1)}[key]
+    best = None
+    for it in items:
+        if it is cur:
+            continue
+        if dx > 0 and it["col"] <= cur["col"]:
+            continue
+        if dx < 0 and it["col"] >= cur["col"]:
+            continue
+        if dy > 0 and it["row"] <= cur["row"]:
+            continue
+        if dy < 0 and it["row"] >= cur["row"]:
+            continue
+        ddx = abs(it["col"] - cur["col"])
+        ddy = abs(it["row"] - cur["row"])
+        if dx:
+            score = ddx + ddy * 2.5
+        else:
+            score = ddy + ddx * 2.5
+        if best is None or score < best[0]:
+            best = (score, it)
+    return best[1] if best else None
+
+
+def handle_input(data, active_panel, sel_dev, sel_guest, sel_ap, sel_dc,
+                 num_devs, num_guests, num_aps, num_dc, modal):
     """
     Parst beliebige Terminal-Sequenzen vollstaendig und nicht-blockierend.
     Returns: dict mit 'quit', 'active_panel', 'sel_dev', 'sel_guest',
-             'sel_ap', 'action', 'modal_action', 'open_modal',
+             'sel_ap', 'sel_dc', 'action', 'modal_action', 'open_modal',
              'close_modal', 'form_submit', 'form_cancel', 'confirm_yes'
     """
     res = {
@@ -1240,6 +1472,7 @@ def handle_input(data, active_panel, sel_dev, sel_guest, sel_ap,
         "sel_dev": sel_dev,
         "sel_guest": sel_guest,
         "sel_ap": sel_ap,
+        "sel_dc": sel_dc,
         "action": None,
         "modal_action": None,
         "open_modal": False,
@@ -1249,9 +1482,21 @@ def handle_input(data, active_panel, sel_dev, sel_guest, sel_ap,
         "confirm_yes": False,
     }
 
-    max_d = max(0, num_devs - 1)
-    max_g = max(0, num_guests - 1)
-    max_a = max(0, num_aps - 1)
+    def move(key):
+        """Raeumliche Navigation: naechstes Element in Richtung key."""
+        tgt = spatial_target(res["active_panel"], res["sel_dev"],
+                             res["sel_guest"], res["sel_ap"], res["sel_dc"], key)
+        if not tgt:
+            return
+        res["active_panel"] = tgt["panel"]
+        if tgt["panel"] == 0:
+            res["sel_dev"] = tgt["idx"]
+        elif tgt["panel"] == 1:
+            res["sel_guest"] = tgt["idx"]
+        elif tgt["panel"] == 2:
+            res["sel_ap"] = tgt["idx"]
+        else:
+            res["sel_dc"] = 0
 
     def form_field():
         return modal["fields"][modal.get("focus", 0)]
@@ -1334,33 +1579,20 @@ def handle_input(data, active_panel, sel_dev, sel_guest, sel_ap,
 
             if i + 2 < n and data[i + 1] == 0x5b:  # ESC [
                 code = data[i + 2]
+                if modal:
+                    i += 3
+                    continue
                 if code == 0x41:  # Up
-                    if res["active_panel"] == 0:
-                        res["sel_dev"] = max(0, res["sel_dev"] - 1)
-                    elif res["active_panel"] == 1:
-                        res["sel_guest"] = max(0, res["sel_guest"] - 1)
-                    else:
-                        res["sel_ap"] = max(0, res["sel_ap"] - 1)
+                    move("up")
                     i += 3; continue
                 elif code == 0x42:  # Down
-                    if res["active_panel"] == 0:
-                        res["sel_dev"] = min(max_d, res["sel_dev"] + 1)
-                    elif res["active_panel"] == 1:
-                        res["sel_guest"] = min(max_g, res["sel_guest"] + 1)
-                    else:
-                        res["sel_ap"] = min(max_a, res["sel_ap"] + 1)
+                    move("down")
                     i += 3; continue
                 elif code == 0x44:  # Left
-                    if res["active_panel"] == 2:
-                        res["active_panel"] = 1
-                    else:
-                        res["active_panel"] = 0
+                    move("left")
                     i += 3; continue
                 elif code == 0x43:  # Right
-                    if res["active_panel"] == 0:
-                        res["active_panel"] = 1
-                    elif res["active_panel"] == 1 and num_aps:
-                        res["active_panel"] = 2
+                    move("right")
                     i += 3; continue
                 else:
                     i += 3; continue
@@ -1371,12 +1603,18 @@ def handle_input(data, active_panel, sel_dev, sel_guest, sel_ap,
 
         # ── Tab ──
         if b == 0x09:
+            order = [0]
+            if num_guests:
+                order.append(1)
             if num_aps:
-                res["active_panel"] = (res["active_panel"] + 1) % 3
-            elif res["active_panel"] == 2:
-                res["active_panel"] = 0
+                order.append(2)
+            if num_dc:
+                order.append(3)
+            if res["active_panel"] in order:
+                pos = order.index(res["active_panel"])
+                res["active_panel"] = order[(pos + 1) % len(order)]
             else:
-                res["active_panel"] = 1 - res["active_panel"]
+                res["active_panel"] = order[-1]
             i += 1
             continue
 
@@ -1431,26 +1669,13 @@ def handle_input(data, active_panel, sel_dev, sel_guest, sel_ap,
         elif b == 0x20:
             res["action"] = "toggle_pause"
         elif c in ("j",):
-            if res["active_panel"] == 0:
-                res["sel_dev"] = min(max_d, res["sel_dev"] + 1)
-            elif res["active_panel"] == 1:
-                res["sel_guest"] = min(max_g, res["sel_guest"] + 1)
-            else:
-                res["sel_ap"] = min(max_a, res["sel_ap"] + 1)
+            move("down")
         elif c in ("k",):
-            if res["active_panel"] == 0:
-                res["sel_dev"] = max(0, res["sel_dev"] - 1)
-            elif res["active_panel"] == 1:
-                res["sel_guest"] = max(0, res["sel_guest"] - 1)
-            else:
-                res["sel_ap"] = max(0, res["sel_ap"] - 1)
+            move("up")
         elif c in ("h",):
-            res["active_panel"] = 1 if res["active_panel"] == 2 else 0
+            move("left")
         elif c in ("l",):
-            if res["active_panel"] == 0:
-                res["active_panel"] = 1
-            elif res["active_panel"] == 1 and num_aps:
-                res["active_panel"] = 2
+            move("right")
         elif c in ("s", "S"):
             res["action"] = "quick_start"
         elif c in ("x", "X"):
@@ -1682,6 +1907,7 @@ def main():
     sel_dev = 0
     sel_guest = 0
     sel_ap = 0
+    sel_dc = 0
     msg = None
     msg_until = 0
     modal = None
@@ -1698,10 +1924,12 @@ def main():
             prox = load(PROX)
             speed = load(SPEED)
             uni = load(UNI)
+            dc = load(DECONZ)
 
             dev_items = flat_devices(CFG)
             guest_items = flat_guests(prox)
             ap_items = (uni or {}).get("aps") or []
+            has_dc = bool(dc)
 
             if sel_dev >= len(dev_items):
                 sel_dev = max(0, len(dev_items) - 1)
@@ -1711,6 +1939,19 @@ def main():
                 sel_ap = max(0, len(ap_items) - 1)
             if active_panel == 2 and not ap_items:
                 active_panel = 1
+            if active_panel == 3 and not has_dc:
+                active_panel = 1
+
+            # Offenes AP-Modal mit frischen Daten versorgen
+            if modal and modal.get("type") == "unifi":
+                mac = (modal.get("ap") or {}).get("mac")
+                cur = next((a for a in ap_items if a.get("mac") == mac), None)
+                if cur:
+                    modal["ap"] = cur
+                    modal["clients"] = [c for c in (uni.get("clients") or [])
+                                        if c.get("ap_mac") == mac]
+            if modal and modal.get("type") == "deconz":
+                modal["data"] = dc or modal.get("data")
 
             # Offenes AP-Modal mit frischen Daten versorgen
             if modal and modal.get("type") == "unifi":
@@ -1731,8 +1972,9 @@ def main():
             if msg and time.time() > msg_until:
                 msg = None
 
-            rows = render(w, h, state, prox, speed, uni, frame,
-                          active_panel, sel_dev, sel_guest, sel_ap, msg, modal)
+            rows = render(w, h, state, prox, speed, uni, dc, frame,
+                          active_panel, sel_dev, sel_guest, sel_ap, sel_dc,
+                          msg, modal)
             safe_write(ESC + "[H" + "\n".join(rows) + RST)
             frame += 1
 
@@ -1758,6 +2000,7 @@ def main():
                     my = int(m.group(3)) - 1
                     kind = m.group(4)
                     if kind == b"M" and btn == 0:
+                        hit = False
                         for yy, ai in LAST_LAYOUT.get("ap_hits", []):
                             if (yy == my
                                     and LAST_LAYOUT.get("x0", 0) <= mx
@@ -1765,13 +2008,22 @@ def main():
                                 active_panel = 2
                                 sel_ap = ai
                                 modal = open_unifi_modal(uni, ai)
+                                hit = True
                                 break
+                        if (not hit and dc
+                                and LAST_LAYOUT.get("dc_hit") == my
+                                and LAST_LAYOUT.get("x0", 0) <= mx
+                                <= LAST_LAYOUT.get("x1", -1)):
+                            active_panel = 3
+                            sel_dc = 0
+                            modal = open_deconz_modal(dc)
                 data = MOUSE_RE.sub(b"", data)
                 if not data:
                     continue
 
             inp = handle_input(data, active_panel, sel_dev, sel_guest, sel_ap,
-                               len(dev_items), len(guest_items), len(ap_items), modal)
+                               sel_dc, len(dev_items), len(guest_items),
+                               len(ap_items), 1 if has_dc else 0, modal)
 
             if inp["quit"]:
                 break
@@ -1780,10 +2032,13 @@ def main():
             sel_dev = inp["sel_dev"]
             sel_guest = inp["sel_guest"]
             sel_ap = inp["sel_ap"]
+            sel_dc = inp["sel_dc"]
 
             # Modal oeffnen
             if inp["open_modal"] and not modal:
-                if active_panel == 2 and ap_items:
+                if active_panel == 3 and dc:
+                    modal = open_deconz_modal(dc)
+                elif active_panel == 2 and ap_items:
                     modal = open_unifi_modal(uni, sel_ap)
                 elif active_panel == 1 and guest_items:
                     ni, g = guest_items[sel_guest]

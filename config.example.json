@@ -328,5 +328,11 @@
     "site": "default",
     "timeout": 8,
     "verify_tls": false
+  },
+  "deconz_interval_sec": 60,
+  "deconz": {
+    "url": "http://192.168.178.247",
+    "apikey": "DEIN-DECONZ-API-KEY",
+    "timeout": 6
   }
 }
