@@ -256,6 +256,55 @@ def update_internet(prev, raw, cfg, now):
     }, notify
 
 
+def _dur(sec):
+    """Kompakte Dauer fuer Meldungen: 45s, 12m, 3h05, 4d3h."""
+    sec = int(max(0, sec or 0))
+    if sec < 60:
+        return "{}s".format(sec)
+    if sec < 3600:
+        return "{}m".format(sec // 60)
+    if sec < 86400:
+        return "{}h{:02d}".format(sec // 3600, (sec % 3600) // 60)
+    return "{}d{}h".format(sec // 86400, (sec % 86400) // 3600)
+
+
+def collect_device_notifications(cfg, prev_devs, ping_results, now):
+    """Sammelt Geraete-Wechsel, fuer die eine ntfy-Meldung gewuenscht ist.
+
+    config: "notify": "none" | "down" | "up" | "both" (Standard: none)
+    """
+    out = []
+    for gid, grp in cfg.get("groups", {}).items():
+        label = grp.get("label", gid)
+        for dev in grp.get("devices", []):
+            if dev.get("paused"):
+                continue
+            mode = dev.get("notify", "none")
+            if mode not in ("down", "up", "both"):
+                continue
+            ip = dev.get("ip", "").strip()
+            name = dev.get("name", ip)
+            prev_rec = prev_devs.get("{}|{}".format(gid, name)) or {}
+            was = prev_rec.get("ping_ok")
+            if was is None:
+                continue  # erster Lauf: kein Wechsel
+            alive = ping_results.get(ip, (False, 0.0))[0]
+            if bool(was) == bool(alive):
+                continue
+            direction = "up" if alive else "down"
+            if mode not in (direction, "both"):
+                continue
+            out.append({
+                "name": name,
+                "ip": ip,
+                "group": label,
+                "direction": direction,
+                "duration": now - (prev_rec.get("since") or now),
+                "last_down": prev_rec.get("last_down"),
+            })
+    return out
+
+
 def _lock_or_exit():
     """Verhindert parallele Checker-Laeufe (Race -> Doppelmeldungen)."""
     for attempt in range(5):
@@ -378,6 +427,41 @@ def main():
             }
             if alive:
                 online += 1
+
+    # ─── Geraete-Meldungen (pro Geraet in config.json: "notify") ───
+    dev_notices = collect_device_notifications(cfg, prev_devs, ping_results, now)
+    if dev_notices and internet_ok:
+        poll = max(1, int(cfg.get("poll_interval", 15)))
+        last_up = inet_fields.get("internet_last_up")
+        down_base = inet_fields.get("internet_down_since") or 0
+        pending = []
+        for n in dev_notices:
+            # War der Ausfall unser eigener Internet-Ausfall, nicht einzeln melden
+            if (n["direction"] == "up" and last_up and down_base
+                    and (now - last_up) <= 2 * poll
+                    and (n["last_down"] or 0) >= down_base):
+                continue
+            pending.append(n)
+        pending.sort(key=lambda n: n["direction"] != "down")
+        extra = max(0, len(pending) - 5)
+        try:
+            import notify as ntfy
+            for n in pending[:5]:
+                if n["direction"] == "down":
+                    ntfy.send("{} ({}) ist offline.\nGruppe: {}\nWar {} online.".format(
+                                  n["name"], n["ip"], n["group"], _dur(n["duration"])),
+                              title="{} offline".format(n["name"]),
+                              tags="rotating_light")
+                else:
+                    ntfy.send("{} ({}) ist wieder erreichbar.\nGruppe: {}\nWar {} offline.".format(
+                                  n["name"], n["ip"], n["group"], _dur(n["duration"])),
+                              title="{} wieder online".format(n["name"]),
+                              tags="white_check_mark")
+            if extra:
+                ntfy.send("{} weitere Geraete haben ihren Status gewechselt.".format(extra),
+                          title="Weitere Statuswechsel", tags="information_source")
+        except Exception:
+            pass
 
     net_rtt = round(ping_results.get(inet_ip, (False, 0))[1], 1)
     devices["!network|INTERNET"] = {

@@ -12,6 +12,8 @@ Zeigt in einem mehrspaltigen ASCII-Layout:
   VMs/Containern inkl. RAM-Nutzung - Start/Stop direkt aus dem Dashboard
 - **Verwaltung im TUI**: Geräte anlegen / pausieren / löschen, Intervalle
   für Ping und Speedtest einstellen, Statusdauer je Gerät
+- **ntfy-Meldungen pro Gerät**: auf Wunsch bei DOWN, UP oder beidem
+- **Uptime** des Dashboards-Rechners in der Titelzeile
 
 Nur **Python 3 stdlib + `fping`** — kein pip, kein venv, kein Framework.
 
@@ -50,6 +52,7 @@ Nur **Python 3 stdlib + `fping`** — kein pip, kein venv, kein Framework.
 | `Space`              | **Geraet pausieren / wieder aktivieren** (kein Ping, zaehlt nicht mit) |
 | `d`                  | **Geraet loeschen** (mit Rueckfrage)                  |
 | `c`                  | **Intervalle + Meldungen einstellen** (Ping, Speedtest, Offline/Online ab) |
+| `n`                  | Im Geräte-Modal: **ntfy-Meldung** umschalten (aus → down → up → beides) |
 | `1`..`5`             | Im Proxmox-Modal: Start / Shutdown / Reboot / Reset / Backup |
 | `q` / `ESC`          | Modal schliessen (wenn offen) bzw. **Dashboard beenden** (zu Bash) |
 | `s` / `x`            | Quick-Start / Quick-Stop fuer gewaehlten Proxmox-Guest |
@@ -172,6 +175,34 @@ sudo reboot
 
 Pruefen: `cat /proc/cmdline` (enthaelt `consoleblank=300`) und
 `cat /sys/module/kernel/parameters/consoleblank`.
+
+## Benachrichtigungen pro Gerät
+
+Standardmäßig wird pro Gerät **nichts** gemeldet. Im Geräte-Modal (`Enter`)
+schaltet `n` durch:
+
+| Modus | Meldung |
+|---|---|
+| `aus` | keine Meldung (Standard) |
+| `nur DOWN` | „*Gerät* offline – war X online" |
+| `nur UP` | „*Gerät* wieder erreichbar – war X offline" |
+| `UP + DOWN` | beide Richtungen |
+
+In der Geräteliste markiert ein gelber Punkt `•` die Geräte mit aktiver Meldung.
+In `config.json` steht das als `"notify": "down" | "up" | "both"` (fehlt =
+aus). Gesendet wird nur bei echtem Statuswechsel; solange das Internet selbst
+weg ist, werden Geräte-Meldungen unterdrückt, und Geräte, die während eines
+Internet-Ausfalls down gingen, lösen danach keine Einzel-Flut aus (max. 5
+Meldungen pro Durchlauf, Rest als Sammelmeldung).
+
+## Uptime in der Titelzeile
+
+```
+ SERVERRAUM DASHBOARD  ⠋  zero2 / Zero 2 W / Debian 13  up 3d4h        18:49:42
+```
+
+Gelesen wird `/proc/uptime`; bei schmalem Terminal entfällt zuerst die
+Hardware-/OS-Info, die Uptime bleibt stehen.
 
 ## Statusdauer
 

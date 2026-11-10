@@ -67,6 +67,15 @@ def _hostinfo():
 
 HOSTINFO = _hostinfo()
 
+
+def host_uptime():
+    """Laufzeit des eigenen Systems in Sekunden."""
+    try:
+        with open("/proc/uptime") as f:
+            return float(f.read().split()[0])
+    except Exception:
+        return 0.0
+
 HERE = os.path.dirname(os.path.abspath(__file__))
 STATE = os.path.join(HERE, "state.json")
 PROX = os.path.join(HERE, "proxmox.json")
@@ -182,6 +191,10 @@ def human_bytes(b):
 
 
 def human_uptime(sec):
+    try:
+        sec = int(sec)
+    except Exception:
+        return "-"
     if sec <= 0:
         return "-"
     d = sec // 86400
@@ -436,9 +449,22 @@ def build_device_modal(modal, mw):
         hstatus = (CLR["green"] + "HTTP {}".format(code) if http_ok else CLR["red"] + "Timeout/Fehler") + RST
         lines.append(mline("HTTP:    Port {} ({})".format(http_p, hstatus)))
 
+    mode = dev.get("notify", "none")
+    if mode == "both":
+        mode_txt = CLR["yellow"] + "UP + DOWN" + RST
+    elif mode == "down":
+        mode_txt = CLR["red"] + "nur DOWN" + RST
+    elif mode == "up":
+        mode_txt = CLR["green"] + "nur UP" + RST
+    else:
+        mode_txt = CLR["gray"] + "aus" + RST
+    lines.append(mline("Meldung: {}  {}".format(
+        mode_txt, CLR["dark"] + "(ntfy bei Statuswechsel)" + RST)))
+
     lines.append(msep())
     lines.append(mline(CLR["cyan"] + BOLD + "AKTIONEN:" + RST))
     lines.append(mline("  " + CLR["cyan"] + "[r] Ping jetzt wiederholen" + RST))
+    lines.append(mline("  " + CLR["yellow"] + "[n] Meldung: aus / down / up / beides" + RST))
     if paused:
         lines.append(mline("  " + CLR["green"] + "[Space] Pausierung aufheben" + RST))
     else:
@@ -536,9 +562,19 @@ def render(w, h, state, prox, speed, frame, active_panel, sel_dev, sel_guest, ms
     spin = SPIN[frame % len(SPIN)]
 
     # ─── Row 0: Titelleiste ───
-    title = " SERVERRAUM DASHBOARD  {}  {} ".format(spin, HOSTINFO)
+    up = human_age(host_uptime())
+    host = HOSTINFO.split(" / ")[0]
     clock = time.strftime("%H:%M:%S ")
-    left = title
+    title_variants = [
+        " SERVERRAUM DASHBOARD  {}  {}  up {} ".format(spin, HOSTINFO, up),
+        " SERVERRAUM DASHBOARD  {}  {}  up {} ".format(spin, host, up),
+        " SERVERRAUM DASHBOARD  up {} ".format(up),
+    ]
+    left = title_variants[-1]
+    for cand in title_variants:
+        if vlen(cand) + vlen(clock) <= w:
+            left = cand
+            break
     right = clock
     mid = max(0, w - vlen(left) - vlen(right))
     rows.append(CLR["titlebg"] + BOLD + left + " " * mid + right + RST)
@@ -728,8 +764,10 @@ def build_device_lines(devs, state, w, sel_dev):
                     rts_c, rts = CLR["red"], "DOWN"
                 age_c = CLR["green"] if ok else CLR["red"]
                 age_s = human_age(now - rec["since"]) if rec.get("since") else "-"
-            nm_w = cw - 15
-            cell = (" " + ic + " " + padto(nm, nm_w) + " "
+            nm_w = cw - 17
+            armed = (not d.get("paused")) and d.get("notify") in ("down", "up", "both")
+            mark = CLR["yellow"] + "\u2022" + RST if armed else " "
+            cell = (" " + ic + " " + mark + " " + padto(nm, nm_w) + " "
                     + rts_c + clip(rts, 5).rjust(5) + RST + " "
                     + age_c + clip(age_s, 5).rjust(5) + RST)
             if global_di == sel_dev:
@@ -1095,6 +1133,8 @@ def handle_input(data, active_panel, sel_dev, sel_guest, num_devs, num_guests, m
                     res["modal_action"] = "ping"
                 elif c in ("d", "D"):
                     res["modal_action"] = "delete"
+                elif c in ("n", "N"):
+                    res["modal_action"] = "notify"
                 elif b == 0x20:
                     res["modal_action"] = "pause"
             i += 1
@@ -1279,6 +1319,33 @@ def apply_form(modal):
             poll, speed, off, on)
 
     return "unbekanntes Formular", None
+
+
+NOTIFY_MODES = ["none", "down", "up", "both"]
+NOTIFY_LABELS = {
+    "none": "aus",
+    "down": "nur DOWN",
+    "up": "nur UP",
+    "both": "UP + DOWN",
+}
+
+
+def next_notify(current):
+    cur = current if current in NOTIFY_MODES else "none"
+    return NOTIFY_MODES[(NOTIFY_MODES.index(cur) + 1) % len(NOTIFY_MODES)]
+
+
+def set_notify(gid, name, mode):
+    dev = find_device(gid, name)
+    if not dev:
+        return False
+    if mode in (None, "", "none"):
+        dev.pop("notify", None)
+    else:
+        dev["notify"] = mode
+    save_config(CFG)
+    run_checker_now()
+    return True
 
 
 def set_paused(gid, name, paused):
@@ -1468,6 +1535,13 @@ def main():
                         msg = "{} {}".format(nm, "pausiert" if newp else "wieder aktiv")
                         modal = None
                     msg_until = time.time() + 3
+                elif modal["type"] == "device" and mact == "notify":
+                    gid, nm = modal["gid"], modal["dev"]["name"]
+                    newmode = next_notify(modal["dev"].get("notify"))
+                    if set_notify(gid, nm, newmode):
+                        CFG = load(CONFIG) or CFG
+                        modal["dev"] = find_device(gid, nm) or modal["dev"]
+                        modal["result"] = "Meldung: {}".format(NOTIFY_LABELS[newmode])
                 elif modal["type"] == "device" and mact == "delete":
                     modal = {
                         "type": "confirm",

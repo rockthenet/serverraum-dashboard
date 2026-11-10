@@ -46,7 +46,8 @@
           "name": "FRITZ!Box 6590",
           "ip": "192.168.178.1",
           "http": 80,
-          "type": "router"
+          "type": "router",
+          "notify": "both"
         },
         {
           "name": "AdGuard / Pi-hole",
