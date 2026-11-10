@@ -837,13 +837,21 @@ def build_proxmox_lines(prox, w, sel_guest):
                 memtxt = "{}/{}".format(human_bytes(g["mem"]), human_bytes(g["maxmem"]))
                 membar = bar(memf, 6, CLR["green"] if memf < 0.85 else CLR["orange"])
                 up = human_uptime(g.get("uptime", 0))
-                tail = " {} {} {}".format(membar, memtxt,
-                                          CLR["gray"] + "up " + up + RST)
+                # Uptime direkt hinter dem Namen, RAM rechtsbuendig
+                head = "  {} {} {}{}".format(sdot, typ, name,
+                                             CLR["gray"] + "  up " + up + RST)
+                tail = " {} {}".format(membar, memtxt)
+                if vlen(head) + vlen(tail) > w:
+                    tail = " {} {}".format(
+                        bar(memf, 4, CLR["green"] if memf < 0.85 else CLR["orange"]),
+                        memtxt)
             else:
-                tail = " " + CLR["dark"] + "stopped" + RST
-            prefix = "  {} {} ".format(sdot, typ)
-            name_w = max(6, w - vlen(prefix) - vlen(tail))
-            line = prefix + padto(name, name_w) + tail
+                head = "  {} {} {}{}".format(sdot, typ, name,
+                                             CLR["dark"] + "  stopped" + RST)
+                tail = ""
+            line = head + " " * max(0, w - vlen(head) - vlen(tail)) + tail
+            if vlen(line) > w:
+                line = clip(line, w)
             if sel:
                 line = hl(line, w)
             out.append(line)
