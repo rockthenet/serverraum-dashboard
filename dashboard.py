@@ -126,6 +126,7 @@ SPARK = "\u2581\u2582\u2583\u2584\u2585\u2586\u2587\u2588"
 SPIN = ["\u280b", "\u2819", "\u2838", "\u2834", "\u2826", "\u2807"]
 
 ANSI_RE = re.compile(r"\033\[[0-9;?]*[a-zA-Z]")
+MOUSE_RE = re.compile(rb"\033\[<(\d+);(\d+);(\d+)([Mm])")
 
 
 def vlen(s):
@@ -544,11 +545,108 @@ def build_confirm_modal(modal, mw):
     return lines
 
 
+def build_unifi_modal(modal, mw, max_rows=None):
+    """AP-Modal: alle WLAN-Geraete dieses APs in mehreren Spalten."""
+    ap = modal.get("ap") or {}
+    clients = list(modal.get("clients") or [])
+    clients.sort(key=lambda c: (c.get("name") or c.get("hostname") or "").lower())
+
+    mbg = CLR["modalbg"]
+    mhi = CLR["modalhi"]
+
+    def mline(content):
+        return mbg + MBOX["v"] + " " + padto(content, mw - 4) + " " + MBOX["v"] + RST
+
+    def msep(char="\u2500"):
+        return mbg + MBOX["v"] + char * (mw - 2) + MBOX["v"] + RST
+
+    lines = []
+    lines.append(mbg + MBOX["tl"] + MBOX["h"] * (mw - 2) + MBOX["tr"] + RST)
+
+    title = "UNIFI AP: {}  ({})".format(
+        ap.get("name") or "AP",
+        ap.get("model_name") or ap.get("model") or "?")
+    lines.append(mhi + MBOX["v"] + " " + padto(title, mw - 4) + " " + MBOX["v"] + RST)
+    lines.append(mbg + MBOX["lt"] + MBOX["h"] * (mw - 2) + MBOX["rt"] + RST)
+
+    if ap.get("up"):
+        stat = CLR["green"] + BOLD + "ONLINE" + RST
+    else:
+        stat = CLR["red"] + BOLD + "OFFLINE" + RST
+    info = "Status: {}  \u00b7  {} Geraete  \u00b7  up {}  \u00b7  {}".format(
+        stat, len(clients), human_uptime(ap.get("uptime", 0)),
+        ap.get("ip") or "-")
+    lines.append(mline(info))
+    ver = ap.get("version") or "-"
+    lines.append(mline(CLR["dark"] + "Modell: {}  \u00b7  Firmware: {}".format(
+        ap.get("model_name") or ap.get("model") or "?", ver) + RST))
+
+    essids = {}
+    for cl in clients:
+        key = cl.get("essid") or "?"
+        essids[key] = essids.get(key, 0) + 1
+    if essids:
+        parts = ["{} {}".format(k, v) for k, v in
+                 sorted(essids.items(), key=lambda kv: (-kv[1], kv[0]))]
+        lines.append(mline(CLR["dark"] + "WLAN: " + " \u00b7 ".join(parts) + RST))
+
+    lines.append(msep())
+    lines.append(mline(CLR["cyan"] + BOLD + "GERAETE AN DIESEM AP" + RST))
+
+    # Spaltenbreite: bei breitem Terminal 4 Spalten, sonst weniger
+    inner = mw - 4
+    nc = 1
+    if inner >= 100:
+        nc = 4
+    elif inner >= 72:
+        nc = 3
+    elif inner >= 44:
+        nc = 2
+    gap = 1
+    cw = max(12, (inner - gap * (nc - 1)) // nc)
+    name_w = max(5, cw - 9)
+
+    def cell(cl):
+        return _unifi_client_cell(cl, name_w)
+
+    total = len(clients)
+    rows_needed = (total + nc - 1) // nc if total else 0
+    hidden = 0
+    if max_rows is not None:
+        budget = max(0, max_rows - len(lines) - 3)
+        if rows_needed > budget:
+            if budget >= 2:
+                budget -= 1
+                rows_needed = budget
+            else:
+                rows_needed = 0
+            hidden = total - rows_needed * nc
+    if total == 0:
+        lines.append(mline(CLR["dark"] + "keine WLAN-Geraete an diesem AP" + RST))
+    else:
+        for r in range(rows_needed):
+            parts = []
+            for ci in range(nc):
+                idx = ci * rows_needed + r
+                parts.append(cell(clients[idx]) if idx < total else "")
+            lines.append(mline((" " * gap).join(padto(p, cw) for p in parts)))
+        if hidden > 0:
+            lines.append(mline(CLR["dark"] + "+{} weitere Geraete".format(hidden) + RST))
+
+    lines.append(msep())
+    lines.append(mline(CLR["gray"] + "[ESC] oder [q] schliessen" + RST))
+    lines.append(mbg + MBOX["bl"] + MBOX["h"] * (mw - 2) + MBOX["br"] + RST)
+    return lines
+
+
 # ═══════════════════════════════════════════════════════════════════
 # RENDER
 # ═══════════════════════════════════════════════════════════════════
 
-def render(w, h, state, prox, speed, uni, frame, active_panel, sel_dev, sel_guest, msg, modal):
+LAST_LAYOUT = {}
+
+
+def render(w, h, state, prox, speed, uni, frame, active_panel, sel_dev, sel_guest, sel_ap, msg, modal):
     """Baut den kompletten Screen (inkl. evtl. Modal-Overlay)."""
     rows = []
     devs = (state or {}).get("devices", {})
@@ -637,9 +735,14 @@ def render(w, h, state, prox, speed, uni, frame, active_panel, sel_dev, sel_gues
         r_hdr = " PROXMOX CLUSTER "
         l_border = CLR["cyan"] + BOLD
         r_border = CLR["dark"]
-    else:
+    elif active_panel == 1:
         l_hdr = " GERAETE "
         r_hdr = " PROXMOX CLUSTER [AKTIV] "
+        l_border = CLR["dark"]
+        r_border = CLR["cyan"] + BOLD
+    else:
+        l_hdr = " GERAETE "
+        r_hdr = " PROXMOX + UNIFI [AKTIV] "
         l_border = CLR["dark"]
         r_border = CLR["cyan"] + BOLD
 
@@ -656,10 +759,22 @@ def render(w, h, state, prox, speed, uni, frame, active_panel, sel_dev, sel_gues
     # ─── Body ───
     body_h = max(1, h - 5)
     left_lines = build_device_lines(devs, state, LW, sel_dev if active_panel == 0 else -1)
-    right_lines = build_proxmox_lines(prox, RW, sel_guest if active_panel == 1 else -1)
+    prox_lines = build_proxmox_lines(prox, RW, sel_guest if active_panel == 1 else -1)
+    right_lines = list(prox_lines)
     rest = max(0, body_h - len(right_lines))
+    uni_hits = []
     if rest > 0:
-        right_lines = right_lines + build_unifi_lines(uni, RW, rest)
+        right_lines += build_unifi_lines(
+            uni, RW, rest,
+            sel_ap if active_panel == 2 else -1, uni_hits)
+
+    # Klick-Ziele fuer die AP-Zeilen merken (Maus)
+    global LAST_LAYOUT
+    LAST_LAYOUT = {
+        "ap_hits": [(3 + len(prox_lines) + off, ai) for off, ai in uni_hits],
+        "x0": LW + 2,
+        "x1": LW + 2 + RW - 1,
+    }
 
     for i in range(body_h):
         lc_cell = left_lines[i] if i < len(left_lines) else ""
@@ -682,8 +797,11 @@ def render(w, h, state, prox, speed, uni, frame, active_panel, sel_dev, sel_gues
     elif active_panel == 0:
         foot = (" Tab=Proxmox  \u2191\u2193=Waehlen  Enter=Details  a=Neu  Space=Pause  "
                 "d=Loeschen  c=Config  r=Ping  q=Ende")
+    elif active_panel == 2:
+        foot = (" Tab=Geraete  \u2191\u2193=AP waehlen  Enter=Geraete am AP  "
+                "c=Config  q=Ende")
     else:
-        foot = " Tab=Geraete  \u2191\u2193=Waehlen  Enter=Aktions-Modal  s=Start  x=Stop  p=Refresh  c=Config  q=Ende"
+        foot = " Tab=Geraete/UniFi  \u2191\u2193=Waehlen  Enter=Aktions-Modal  s=Start  x=Stop  p=Refresh  c=Config  q=Ende"
     rows.append(CLR["footbg"] + padto(foot, w) + RST)
 
     while len(rows) < h:
@@ -692,15 +810,19 @@ def render(w, h, state, prox, speed, uni, frame, active_panel, sel_dev, sel_gues
 
     # ─── Lightbox Modal Overlay (wenn aktiv) ───
     if modal:
-        mw = min(60, w - 4)
-        if modal["type"] == "proxmox":
-            mlines = build_proxmox_modal(modal, mw)
-        elif modal["type"] == "device":
-            mlines = build_device_modal(modal, mw)
-        elif modal["type"] == "form":
-            mlines = build_form_modal(modal, mw)
+        if modal["type"] == "unifi":
+            mw = min(120, w - 4)
+            mlines = build_unifi_modal(modal, mw, max(8, h - 4))
         else:
-            mlines = build_confirm_modal(modal, mw)
+            mw = min(60, w - 4)
+            if modal["type"] == "proxmox":
+                mlines = build_proxmox_modal(modal, mw)
+            elif modal["type"] == "device":
+                mlines = build_device_modal(modal, mw)
+            elif modal["type"] == "form":
+                mlines = build_form_modal(modal, mw)
+            else:
+                mlines = build_confirm_modal(modal, mw)
         mh = len(mlines)
         sx = (w - mw) // 2
         sy = max(2, (h - mh) // 2)
@@ -899,38 +1021,18 @@ def _unifi_ap_line(ap, w):
     return clip(line, w)
 
 
-def _unifi_client_line(cl, w):
+def _unifi_client_cell(cl, name_w):
+    """Eine Zelle fuer das AP-Modal: Name + Signalstaerke."""
     sig = cl.get("signal")
     color = _signal_color(sig)
     name = cl.get("name") or cl.get("hostname") or cl.get("ip") or "?"
-    prefix = "  {} ".format(color + "\u00b7" + RST)
-    sigtxt = "{}dBm".format(sig) if sig is not None else "?"
-    sigtxt = sigtxt.rjust(6)
-    tails = [
-        color + sigtxt + RST + "  " + CLR["dark"] + (cl.get("ap_name") or "") + RST,
-        color + sigtxt + RST,
-        "",
-    ]
-    if not cl.get("ap_name"):
-        tails = tails[1:]
-    tail = tails[0]
-    name_w = w - vlen(prefix) - vlen(tail) - 1
-    for cand in tails:
-        if w - vlen(prefix) - vlen(cand) - 1 >= 5:
-            tail = cand
-            name_w = w - vlen(prefix) - vlen(cand) - 1
-            break
-    else:
-        name_w = max(1, w - vlen(prefix) - 1)
-    name_w = max(1, name_w)
-    line = prefix + padto(clip(name, name_w), name_w)
-    if tail:
-        line += " " + tail
-    return clip(line, w)
+    sigtxt = ("{}dBm".format(sig) if sig is not None else "-").rjust(6)
+    return (color + "\u00b7" + RST + " " + padto(clip(name, name_w), name_w)
+            + " " + color + sigtxt + RST)
 
 
-def build_unifi_lines(uni, w, max_lines):
-    """UniFi-Block: APs + WLAN-Clients (kompakt, unter dem Proxmox-Panel)."""
+def build_unifi_lines(uni, w, max_lines, sel_ap=-1, hit_rows=None):
+    """UniFi-Block: nur Access Points. Die Geraete stehen im AP-Modal."""
     out = []
     if not uni:
         out.append(CLR["dark"] + " \u2b24 UniFi: keine Daten" + RST)
@@ -969,34 +1071,38 @@ def build_unifi_lines(uni, w, max_lines):
         if max_lines is not None and len(out) >= max_lines:
             return out
 
-    avail = None if max_lines is None else max(0, max_lines - len(out))
-    if avail is not None and avail <= 0:
+    room = None if max_lines is None else max(0, max_lines - len(out))
+    if room is not None and room <= 0:
         return out
 
-    ap_lines = [_unifi_ap_line(a, w) for a in aps]
-    cl_lines = [_unifi_client_line(c, w) for c in clients]
+    shown = 0
+    for idx, ap in enumerate(aps):
+        if room is not None and shown >= room:
+            break
+        line = _unifi_ap_line(ap, w)
+        if idx == sel_ap:
+            line = hl(line, w)
+        if hit_rows is not None:
+            hit_rows.append((len(out), idx))
+        out.append(line)
+        shown += 1
 
-    if avail is not None and len(ap_lines) > avail:
-        out.extend(ap_lines[:avail])
-        return out
-    out.extend(ap_lines)
-    if avail is not None:
-        avail -= len(ap_lines)
-    else:
-        avail = None
-    if avail is not None and avail <= 0:
-        return out
-
-    if avail is None or len(cl_lines) <= avail:
-        out.extend(cl_lines)
-    elif avail <= 1:
-        out.extend(cl_lines[:avail])
-    else:
-        show = avail - 1
-        out.extend(cl_lines[:show])
-        out.append(CLR["dark"] + "  +{} weitere Geraete".format(
-            len(cl_lines) - show) + RST)
+    hidden = len(aps) - shown
+    if hidden > 0 and (max_lines is None or len(out) < max_lines):
+        out.append(CLR["dark"] + "  +{} weitere APs".format(hidden) + RST)
     return out
+
+
+def open_unifi_modal(uni, ap_index):
+    """Baut das AP-Modal (Geräte des gewaehlten Access Points)."""
+    aps = (uni or {}).get("aps") or []
+    if ap_index < 0 or ap_index >= len(aps):
+        return None
+    ap = aps[ap_index]
+    mac = ap.get("mac")
+    clients = [c for c in (uni.get("clients") or [])
+               if c.get("ap_mac") == mac]
+    return {"type": "unifi", "ap": ap, "clients": clients}
 
 
 # ═══════════════════════════════════════════════════════════════════
@@ -1120,18 +1226,20 @@ def guest_action(node_idx, node_name, vmid, gtype, action):
 # INPUT-PARSER (ROBUST & NON-BLOCKING)
 # ═══════════════════════════════════════════════════════════════════
 
-def handle_input(data, active_panel, sel_dev, sel_guest, num_devs, num_guests, modal):
+def handle_input(data, active_panel, sel_dev, sel_guest, sel_ap,
+                 num_devs, num_guests, num_aps, modal):
     """
     Parst beliebige Terminal-Sequenzen vollstaendig und nicht-blockierend.
     Returns: dict mit 'quit', 'active_panel', 'sel_dev', 'sel_guest',
-             'action', 'modal_action', 'open_modal', 'close_modal',
-             'form_submit', 'form_cancel', 'confirm_yes'
+             'sel_ap', 'action', 'modal_action', 'open_modal',
+             'close_modal', 'form_submit', 'form_cancel', 'confirm_yes'
     """
     res = {
         "quit": False,
         "active_panel": active_panel,
         "sel_dev": sel_dev,
         "sel_guest": sel_guest,
+        "sel_ap": sel_ap,
         "action": None,
         "modal_action": None,
         "open_modal": False,
@@ -1143,6 +1251,7 @@ def handle_input(data, active_panel, sel_dev, sel_guest, num_devs, num_guests, m
 
     max_d = max(0, num_devs - 1)
     max_g = max(0, num_guests - 1)
+    max_a = max(0, num_aps - 1)
 
     def form_field():
         return modal["fields"][modal.get("focus", 0)]
@@ -1228,20 +1337,30 @@ def handle_input(data, active_panel, sel_dev, sel_guest, num_devs, num_guests, m
                 if code == 0x41:  # Up
                     if res["active_panel"] == 0:
                         res["sel_dev"] = max(0, res["sel_dev"] - 1)
-                    else:
+                    elif res["active_panel"] == 1:
                         res["sel_guest"] = max(0, res["sel_guest"] - 1)
+                    else:
+                        res["sel_ap"] = max(0, res["sel_ap"] - 1)
                     i += 3; continue
                 elif code == 0x42:  # Down
                     if res["active_panel"] == 0:
                         res["sel_dev"] = min(max_d, res["sel_dev"] + 1)
-                    else:
+                    elif res["active_panel"] == 1:
                         res["sel_guest"] = min(max_g, res["sel_guest"] + 1)
+                    else:
+                        res["sel_ap"] = min(max_a, res["sel_ap"] + 1)
                     i += 3; continue
                 elif code == 0x44:  # Left
-                    res["active_panel"] = 0
+                    if res["active_panel"] == 2:
+                        res["active_panel"] = 1
+                    else:
+                        res["active_panel"] = 0
                     i += 3; continue
                 elif code == 0x43:  # Right
-                    res["active_panel"] = 1
+                    if res["active_panel"] == 0:
+                        res["active_panel"] = 1
+                    elif res["active_panel"] == 1 and num_aps:
+                        res["active_panel"] = 2
                     i += 3; continue
                 else:
                     i += 3; continue
@@ -1252,7 +1371,12 @@ def handle_input(data, active_panel, sel_dev, sel_guest, num_devs, num_guests, m
 
         # ── Tab ──
         if b == 0x09:
-            res["active_panel"] = 1 - res["active_panel"]
+            if num_aps:
+                res["active_panel"] = (res["active_panel"] + 1) % 3
+            elif res["active_panel"] == 2:
+                res["active_panel"] = 0
+            else:
+                res["active_panel"] = 1 - res["active_panel"]
             i += 1
             continue
 
@@ -1309,17 +1433,24 @@ def handle_input(data, active_panel, sel_dev, sel_guest, num_devs, num_guests, m
         elif c in ("j",):
             if res["active_panel"] == 0:
                 res["sel_dev"] = min(max_d, res["sel_dev"] + 1)
-            else:
+            elif res["active_panel"] == 1:
                 res["sel_guest"] = min(max_g, res["sel_guest"] + 1)
+            else:
+                res["sel_ap"] = min(max_a, res["sel_ap"] + 1)
         elif c in ("k",):
             if res["active_panel"] == 0:
                 res["sel_dev"] = max(0, res["sel_dev"] - 1)
-            else:
+            elif res["active_panel"] == 1:
                 res["sel_guest"] = max(0, res["sel_guest"] - 1)
+            else:
+                res["sel_ap"] = max(0, res["sel_ap"] - 1)
         elif c in ("h",):
-            res["active_panel"] = 0
+            res["active_panel"] = 1 if res["active_panel"] == 2 else 0
         elif c in ("l",):
-            res["active_panel"] = 1
+            if res["active_panel"] == 0:
+                res["active_panel"] = 1
+            elif res["active_panel"] == 1 and num_aps:
+                res["active_panel"] = 2
         elif c in ("s", "S"):
             res["action"] = "quick_start"
         elif c in ("x", "X"):
@@ -1550,11 +1681,14 @@ def main():
     active_panel = 1  # Standard: Proxmox
     sel_dev = 0
     sel_guest = 0
+    sel_ap = 0
     msg = None
     msg_until = 0
     modal = None
 
-    sys.stdout.write(ESC + "[?25l")
+    mouse_on = ESC + "[?1000h" + ESC + "[?1006h"
+    mouse_off = ESC + "[?1006l" + ESC + "[?1000l"
+    sys.stdout.write(ESC + "[?25l" + mouse_on)
     try:
         if is_tty:
             tty.setcbreak(fd)
@@ -1567,11 +1701,25 @@ def main():
 
             dev_items = flat_devices(CFG)
             guest_items = flat_guests(prox)
+            ap_items = (uni or {}).get("aps") or []
 
             if sel_dev >= len(dev_items):
                 sel_dev = max(0, len(dev_items) - 1)
             if sel_guest >= len(guest_items):
                 sel_guest = max(0, len(guest_items) - 1)
+            if sel_ap >= len(ap_items):
+                sel_ap = max(0, len(ap_items) - 1)
+            if active_panel == 2 and not ap_items:
+                active_panel = 1
+
+            # Offenes AP-Modal mit frischen Daten versorgen
+            if modal and modal.get("type") == "unifi":
+                mac = (modal.get("ap") or {}).get("mac")
+                cur = next((a for a in ap_items if a.get("mac") == mac), None)
+                if cur:
+                    modal["ap"] = cur
+                    modal["clients"] = [c for c in (uni.get("clients") or [])
+                                        if c.get("ap_mac") == mac]
 
             try:
                 w, h = os.get_terminal_size()
@@ -1584,7 +1732,7 @@ def main():
                 msg = None
 
             rows = render(w, h, state, prox, speed, uni, frame,
-                          active_panel, sel_dev, sel_guest, msg, modal)
+                          active_panel, sel_dev, sel_guest, sel_ap, msg, modal)
             safe_write(ESC + "[H" + "\n".join(rows) + RST)
             frame += 1
 
@@ -1601,8 +1749,29 @@ def main():
             if not data:
                 continue
 
-            inp = handle_input(data, active_panel, sel_dev, sel_guest,
-                               len(dev_items), len(guest_items), modal)
+            # Maus: Klick auf eine AP-Zeile oeffnet das Geraete-Modal
+            m = MOUSE_RE.search(data)
+            if m:
+                if not modal:
+                    btn = int(m.group(1))
+                    mx = int(m.group(2)) - 1
+                    my = int(m.group(3)) - 1
+                    kind = m.group(4)
+                    if kind == b"M" and btn == 0:
+                        for yy, ai in LAST_LAYOUT.get("ap_hits", []):
+                            if (yy == my
+                                    and LAST_LAYOUT.get("x0", 0) <= mx
+                                    <= LAST_LAYOUT.get("x1", -1)):
+                                active_panel = 2
+                                sel_ap = ai
+                                modal = open_unifi_modal(uni, ai)
+                                break
+                data = MOUSE_RE.sub(b"", data)
+                if not data:
+                    continue
+
+            inp = handle_input(data, active_panel, sel_dev, sel_guest, sel_ap,
+                               len(dev_items), len(guest_items), len(ap_items), modal)
 
             if inp["quit"]:
                 break
@@ -1610,10 +1779,13 @@ def main():
             active_panel = inp["active_panel"]
             sel_dev = inp["sel_dev"]
             sel_guest = inp["sel_guest"]
+            sel_ap = inp["sel_ap"]
 
             # Modal oeffnen
             if inp["open_modal"] and not modal:
-                if active_panel == 1 and guest_items:
+                if active_panel == 2 and ap_items:
+                    modal = open_unifi_modal(uni, sel_ap)
+                elif active_panel == 1 and guest_items:
                     ni, g = guest_items[sel_guest]
                     node = prox["nodes"][ni]
                     modal = {
@@ -1755,7 +1927,7 @@ def main():
                 termios.tcsetattr(fd, termios.TCSANOW, old)
             except Exception:
                 pass
-        sys.stdout.write(ESC + "[?25h" + RST)
+        sys.stdout.write(mouse_off + ESC + "[?25h" + RST)
         sys.stdout.write(ESC + "[2J" + ESC + "[H")
         sys.stdout.flush()
         print("Dashboard beendet. Neustart mit: dash")

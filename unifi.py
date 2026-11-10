@@ -187,7 +187,7 @@ def poll(cfg):
         }
         aps.append(rec)
         ap_by_mac[mac] = name
-    aps.sort(key=lambda a: (not a["up"], a["name"].lower()))
+    aps.sort(key=lambda a: a["name"].lower())
 
     wlan = []
     wired = 0

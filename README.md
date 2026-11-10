@@ -10,8 +10,8 @@ Zeigt in einem mehrspaltigen ASCII-Layout:
 - **Internet-Status** inkl. Verbindungsart (LAN/WLAN, IP, SSID) + regelmäßiger **Speedtest** (Down/Up)
 - **Proxmox-Panel**: beide PVE-Nodes mit CPU/RAM/Disk-Auslastung und allen
   VMs/Containern inkl. RAM-Nutzung und Uptime je Gast - Start/Stop direkt aus dem Dashboard
-- **UniFi-Block** unter dem Proxmox-Panel: Status der Access Points, Anzahl und
-  Signalstärke der WLAN-Geräte (schwächste zuerst), Wired-Zähler
+- **UniFi-Block** unter dem Proxmox-Panel: Status der Access Points; Klick auf
+  einen AP zeigt dessen WLAN-Geräte mehrspaltig im Lightbox-Modal
 - **Verwaltung im TUI**: Geräte anlegen / pausieren / löschen, Intervalle
   für Ping und Speedtest einstellen, Statusdauer je Gerät
 - **ntfy-Meldungen pro Gerät**: auf Wunsch bei DOWN, UP oder beidem
@@ -48,9 +48,10 @@ Nur **Python 3 stdlib + `fping`** — kein pip, kein venv, kein Framework.
 
 | Taste                | Aktion                                                |
 |----------------------|-------------------------------------------------------|
-| `Tab` / `←`/`→`, `h`/`l` | Panel wechseln (**Geraete** <-> **Proxmox**)       |
+| `Tab` / `←`/`→`, `h`/`l` | Panel wechseln (**Geraete** → **Proxmox** → **UniFi**) |
 | `↑`/`↓`, `j`/`k`     | Element im aktiven Panel auswaehlen                   |
 | `Enter`              | **Lightbox-Modal oeffnen** (Aktionen & Details)       |
+| Mausklick            | Auf eine AP-Zeile: **Geraete dieses APs** anzeigen    |
 | `a`                  | **Geraet anlegen** (Name, IP/Host, optional HTTP-Port, Gruppe) |
 | `Space`              | **Geraet pausieren / wieder aktivieren** (kein Ping, zaehlt nicht mit) |
 | `d`                  | **Geraet loeschen** (mit Rueckfrage)                  |
@@ -76,6 +77,11 @@ Nur **Python 3 stdlib + `fping`** — kein pip, kein venv, kein Framework.
 - **Geraete Modal (`Enter`)**:
   Zeigt IP, Gruppe, Typ, Ping-RTT und HTTP-Port-Status.
   - `[r]` Ping sofort wiederholen
+  - `[q]` / `[ESC]` Schliessen
+
+- **UniFi AP Modal (Klick auf AP oder `Enter`)**:
+  Zeigt alle WLAN-Geraete des Access Points in mehreren Spalten, inkl.
+  Signalstaerke und WLAN-Name.
   - `[q]` / `[ESC]` Schliessen
 
 ## Geraeteverwaltung (direkt im Dashboard)
@@ -212,25 +218,47 @@ Im Proxmox-Panel steht hinter jedem laufenden CT/VM ebenfalls die Uptime
 
 ## UniFi-Block
 
-Unter dem Proxmox-Panel steht ein kompakter UniFi-Block:
+Unter dem Proxmox-Panel steht ein kompakter UniFi-Block. Er zeigt **nur die
+Access Points**; die Geräte erscheinen erst im AP-Modal:
 
 ```
 ⬤ UniFi  2/2 APs · 44 WLAN · 12 LAN
   ▲ oben  up 345d22h                      AC Pro 16 Ger
   ▲ unten  up 345d22h                     AC Pro 28 Ger
-  · shelly1-8CAAB555A9D7                  -86dBm  unten
-  · Pixel-10                              -77dBm  unten
-  +35 weitere Geraete
 ```
 
 - Kopfzeile: online/gesamt APs, Anzahl WLAN-Clients, dazu LAN-Clients
 - AP-Zeilen: Uptime hinter dem Namen, Modell + Clientzahl rechts; ausgefallene
   APs erscheinen rot mit `offline`
-- WLAN-Zeilen: **schwächste Verbindung zuerst**, dBm farbig (grün ≥ -60,
-  gelb ≥ -70, orange ≥ -78, rot darunter) und der AP-Name
-- Bei wenig Platz wird gekürzt und mit `+N weitere Geraete` zusammengefasst
+- **Klick auf eine AP-Zeile** (oder `Tab` bis `PROXMOX + UNIFI`, dann `↑`/`↓`
+  und `Enter`) öffnet das AP-Modal
 - Ist der Controller nicht erreichbar, bleiben die letzten Daten sichtbar und
   der Block zeigt `Controller nicht erreichbar (Daten vor …)`
+
+### AP-Modal (Geräte am Access Point)
+
+Das Modal zeigt alle WLAN-Geräte des gewählten APs als **mehrspaltige
+Übersicht** (bis zu 4 Spalten, je nach Terminalbreite), alphabetisch sortiert
+und mit farbiger Signalstärke:
+
+```
+╔══════════════════════════════════════════════════════════════════╗
+║ UNIFI AP: unten  (AC Pro)                                        ║
+╠══════════════════════════════════════════════════════════════════╣
+║ Status: ONLINE  ·  28 Geraete  ·  up 345d22h  ·  192.168.178.40  ║
+║ Modell: AC Pro  ·  Firmware: 6.6.77.15402                        ║
+║ WLAN: WITZ!Box2 23 · WITZ!2.4 5                                  ║
+║──────────────────────────────────────────────────────────────────║
+║ GERAETE AN DIESEM AP                                             ║
+║ · 192.168.178.139 -77dBm · amazon-60d196882 -52dBm · carport ... ║
+║ ...                                                              ║
+║──────────────────────────────────────────────────────────────────║
+║ [ESC] oder [q] schliessen                                        ║
+╚══════════════════════════════════════════════════════════════════╝
+```
+
+- dBm-Farben: grün ≥ -60, gelb ≥ -70, orange ≥ -78, rot darunter
+- Bei wenig Platz wird die Liste mit `+N weitere Geraete` gekürzt
 
 Zugang in `config.json` (Modus 600, **nicht ins Repo**):
 
