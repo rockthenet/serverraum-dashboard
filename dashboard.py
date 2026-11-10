@@ -1146,8 +1146,13 @@ def find_device(gid, name):
     return None
 
 
-def open_add_form():
+def open_add_form(default_gid=None):
     choices = group_choices() or [("eigene", "Eigene")]
+    idx = 0
+    for n, (gid, _lbl) in enumerate(choices):
+        if gid == default_gid:
+            idx = n
+            break
     return {
         "type": "form",
         "kind": "add",
@@ -1159,7 +1164,7 @@ def open_add_form():
             {"key": "ip", "label": "IP/Host", "type": "text", "value": "", "max": 40},
             {"key": "port", "label": "HTTP-Port", "type": "text", "value": "", "max": 5},
             {"key": "group", "label": "Gruppe", "type": "select",
-             "value": choices[0][1], "idx": 0, "options": choices},
+             "value": choices[idx][1], "idx": idx, "options": choices},
         ],
         "hint": "HTTP-Port optional (nur fuer Web-Check)",
     }
@@ -1448,7 +1453,10 @@ def main():
                 msg = "Proxmox-Abfrage gestartet..."
                 msg_until = time.time() + 2
             elif act == "add_device":
-                modal = open_add_form()
+                gid0 = None
+                if active_panel == 0 and dev_items:
+                    gid0 = dev_items[sel_dev][0]
+                modal = open_add_form(gid0)
             elif act == "config":
                 modal = open_config_form()
             elif act == "delete_device" and active_panel == 0 and dev_items:
