@@ -962,8 +962,14 @@ def render(w, h, state, prox, speed, uni, dc, frame, active_panel,
         if stat is not None:
             break
     if stat is None:
-        stat = " {}   {}   {}   next ".format(
-            inet, dev_txt, sp_variants[-1]) + bar(cd, 10, CLR["blue"])
+        stat = " {}   {}   {} ".format(inet, dev_txt, sp_variants[-1])
+        avail = w - vlen(stat) - 5
+        if avail >= 3:
+            stat += "next " + bar(cd, min(10, avail), CLR["blue"])
+        else:
+            avail = w - vlen(stat)
+            if avail > 0:
+                stat += bar(cd, avail, CLR["blue"])
     rows.append(padto(stat, w))
 
     # ─── Row 2: obere Trennlinie mit Panel-Beschriftung ───
