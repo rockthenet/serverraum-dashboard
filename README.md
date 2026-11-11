@@ -9,11 +9,14 @@ Zeigt in einem mehrspaltigen ASCII-Layout:
 - **Erreichbarkeit** aller Netzwerk-Geräte (Ping + optionaler HTTP-Check), gruppiert
 - **Internet-Status** inkl. Verbindungsart (LAN/WLAN, IP, SSID) + regelmäßiger **Speedtest** (Down/Up)
 - **Proxmox-Panel**: beide PVE-Nodes mit CPU/RAM/Disk-Auslastung und allen
-  VMs/Containern inkl. RAM-Nutzung und Uptime je Gast - Start/Stop direkt aus dem Dashboard
-- **UniFi-Block** unter dem Proxmox-Panel: Status der Access Points; Klick auf
-  einen AP zeigt dessen WLAN-Geräte mehrspaltig im Lightbox-Modal
-- **deCONZ/Phoscon-Block**: Anzahl aller Zigbee-Geräte; Klick bzw. `Enter`
-  zeigt die Geräte nach Typ gruppiert mit online/offline
+  VMs/Containern inkl. RAM-Nutzung und Uptime je Gast - Start/Stop direkt aus dem Dashboard;
+  `Enter` auf dem Node-Kopf fährt den **gesamten Server** kontrolliert herunter oder startet ihn neu
+- **UniFi-Block** unter dem Proxmox-Panel: Status und Qualitätswert (`satisfaction`)
+  der Access Points; Klick auf einen AP zeigt Qualität pro Funkband, Link, CPU/RAM
+  und dessen WLAN-Geräte mehrspaltig im Lightbox-Modal
+- **deCONZ/Phoscon-Block**: Anzahl der **konsolidierten** Zigbee-Geräte (mehrere
+  Sensor-Ressourcen je Gerät werden zusammengefasst); Klick bzw. `Enter` zeigt
+  Typen, online/offline und die **Akku-Übersicht** (schwach/leer/ohne Akku)
 - **Freie Pfeilnavigation**: ↑/↓/←/→ springen räumlich zum nächsten Element
   (Geräte-Subspalten, Proxmox-Guests, APs, deCONZ)
 - **Verwaltung im TUI**: Geräte anlegen / pausieren / löschen, Intervalle
@@ -54,20 +57,30 @@ Nur **Python 3 stdlib + `fping`** — kein pip, kein venv, kein Framework.
 | Taste                | Aktion                                                |
 |----------------------|-------------------------------------------------------|
 | `Tab`                | Panel wechseln (**Geraete** → **Proxmox** → **UniFi** → **deCONZ**) |
-| `↑`/`↓`/`←`/`→`, `j`/`k`/`h`/`l` | **Frei räumlich** zum nächsten Element in der Richtung (Geräte-Subspalten, Guests, APs, deCONZ) |
+| `↑`/`↓`/`←`/`→`, `j`/`k`/`h`/`l` | **Frei räumlich** zum nächsten Element in der Richtung (Geräte-Subspalten, Proxmox-Nodes/Guests, APs, deCONZ) |
 | `Enter`              | **Lightbox-Modal oeffnen** (Aktionen & Details)       |
-| Mausklick            | Auf eine AP-Zeile: **Geraete dieses APs** anzeigen; auf den deCONZ-Block: **Typ-Übersicht** |
+| Mausklick            | Auf eine AP-Zeile: **Geraete dieses APs**; auf den deCONZ-Block: **Typ-/Akku-Übersicht**; auf Node/Gast: **Server-/Gast-Modal** |
 | `a`                  | **Geraet anlegen** (Name, IP/Host, optional HTTP-Port, Gruppe) |
 | `Space`              | **Geraet pausieren / wieder aktivieren** (kein Ping, zaehlt nicht mit) |
 | `d`                  | **Geraet loeschen** (mit Rueckfrage)                  |
 | `c`                  | **Intervalle + Meldungen einstellen** (Ping, Speedtest, Offline/Online ab) |
 | `n`                  | Im Geräte-Modal: **ntfy-Meldung** umschalten (aus → down → up → beides) |
-| `1`..`5`             | Im Proxmox-Modal: Start / Shutdown / Reboot / Reset / Backup |
+| `1`..`5`             | Im Proxmox-Guest-Modal: Start / Shutdown / Reboot / Reset / Backup |
+| `s` / `r`            | Im Proxmox-Server-Modal: **ganzen Node herunterfahren / neu starten** (mit `j` bestaetigen) |
 | `q` / `ESC`          | Modal schliessen (wenn offen) bzw. **Dashboard beenden** (zu Bash) |
 | `s` / `x`            | Quick-Start / Quick-Stop fuer gewaehlten Proxmox-Guest |
 | `r` / `p`            | Ping-Check bzw. Proxmox-Status sofort aktualisieren   |
 
 ### Lightbox Modals
+
+- **Proxmox Server Modal (`Enter` auf dem Node-Kopf `⬤ Proxmox 1/2`)**:
+  Zeigt Node-Name, Uptime, CPU-/RAM-/Disk-Auslastung und die Anzahl laufender
+  Gäste. Für Stromausfall/Elektrikarbeiten lässt sich der **gesamte Server**
+  kontrolliert herunterfahren:
+  - `[s]` Gesamten Server herunterfahren (alle VMs/CTs werden sauber beendet)
+  - `[r]` Gesamten Server neu starten
+  - Danach Sicherheitsabfrage mit `[j]` Ja / `[n]` Abbrechen
+  - `[q]` / `[ESC]` Schliessen
 
 - **Proxmox Guest Modal (`Enter`)**:
   Zeigt VMID, Node, Status, Uptime, CPU- & RAM-Balken.
@@ -85,8 +98,8 @@ Nur **Python 3 stdlib + `fping`** — kein pip, kein venv, kein Framework.
   - `[q]` / `[ESC]` Schliessen
 
 - **UniFi AP Modal (Klick auf AP oder `Enter`)**:
-  Zeigt alle WLAN-Geraete des Access Points in mehreren Spalten, inkl.
-  Signalstaerke und WLAN-Name.
+  Zeigt Qualitaet, Link-Geschwindigkeit, CPU/RAM, pro Funkband Kanal,
+  Kanalauslastung und alle WLAN-Geraete des Access Points in mehreren Spalten.
   - `[q]` / `[ESC]` Schliessen
 
 ## Geraeteverwaltung (direkt im Dashboard)
@@ -228,21 +241,25 @@ Access Points**; die Geräte erscheinen erst im AP-Modal:
 
 ```
 ⬤ UniFi  2/2 APs · 44 WLAN · 12 LAN
-  ▲ oben  up 345d22h                      AC Pro 16 Ger
-  ▲ unten  up 345d22h                     AC Pro 28 Ger
+  ▲ oben  up 345d22h  Q96%                AC Pro 16 Ger
+  ▲ unten  up 345d22h  Q97%               AC Pro 28 Ger
 ```
 
 - Kopfzeile: online/gesamt APs, Anzahl WLAN-Clients, dazu LAN-Clients
-- AP-Zeilen: Uptime hinter dem Namen, Modell + Clientzahl rechts; ausgefallene
-  APs erscheinen rot mit `offline`
+- AP-Zeilen: Uptime hinter dem Namen, **Qualitaetswert `Q…%`** (UniFi
+  `satisfaction`) und Modell + Clientzahl rechts; ausgefallene APs erscheinen
+  rot mit `offline`
+- Qualitaetsfarben: grün ≥ 90, gelb ≥ 75, orange ≥ 60, rot darunter. Ein
+  dauerhaft niedriger Wert ist ein Hinweis auf ein Problem am AP (ggf. Neustart)
 - **Klick auf eine AP-Zeile** (oder `Tab` bis `PROXMOX + UNIFI`, dann `↑`/`↓`
   und `Enter`) öffnet das AP-Modal
 - Ist der Controller nicht erreichbar, bleiben die letzten Daten sichtbar und
   der Block zeigt `Controller nicht erreichbar (Daten vor …)`
 
-### AP-Modal (Geräte am Access Point)
+### AP-Modal (Qualitaet + Geräte am Access Point)
 
-Das Modal zeigt alle WLAN-Geräte des gewählten APs als **mehrspaltige
+Das Modal zeigt zuerst die Qualitaetswerte des APs (gesamt und pro Funkband)
+sowie Link, CPU und RAM. Darunter alle WLAN-Geräte als **mehrspaltige
 Übersicht** (bis zu 4 Spalten, je nach Terminalbreite), alphabetisch sortiert
 und mit farbiger Signalstärke:
 
@@ -252,7 +269,9 @@ und mit farbiger Signalstärke:
 ╠══════════════════════════════════════════════════════════════════╣
 ║ Status: ONLINE  ·  28 Geraete  ·  up 345d22h  ·  192.168.178.40  ║
 ║ Modell: AC Pro  ·  Firmware: 6.6.77.15402                        ║
-║ WLAN: WITZ!Box2 23 · WITZ!2.4 5                                  ║
+║ Qualitaet: 97% (sehr gut) · Link: 1000 Mbit/s · CPU 8% · RAM 44% ║
+║   2.4 GHz Kanal 1    Q99%  21 Ger  Last 32%                      ║
+║   5 GHz   Kanal 48   Q92%   8 Ger  Last 5%                       ║
 ║──────────────────────────────────────────────────────────────────║
 ║ GERAETE AN DIESEM AP                                             ║
 ║ · 192.168.178.139 -77dBm · amazon-60d196882 -52dBm · carport ... ║
@@ -262,6 +281,12 @@ und mit farbiger Signalstärke:
 ╚══════════════════════════════════════════════════════════════════╝
 ```
 
+- `Qualitaet` = UniFi-`satisfaction` des APs (gleiche Farbskala wie oben)
+- `Link` zeigt die Uplink-Geschwindigkeit; ist sie **kleiner als die
+  Maximalgeschwindigkeit**, erscheint sie orange mit `(max …)` – typischer
+  Hinweis auf ein Kabel-/Port-Problem
+- pro Radio: Band, Kanal, Qualitaet (`Q…%`), Clientzahl und Kanalauslastung
+  (`Last …%`)
 - dBm-Farben: grün ≥ -60, gelb ≥ -70, orange ≥ -78, rot darunter
 - Bei wenig Platz wird die Liste mit `+N weitere Geraete` gekürzt
 
@@ -285,11 +310,11 @@ automatisch `/api/auth/login` + `/proxy/network` verwendet. Abgefragt werden
 ## deCONZ-Block
 
 Unter dem UniFi-Block steht – durch eine Leerzeile abgesetzt – ein kompakter
-deCONZ-/Phoscon-Block. Im Hauptbildschirm zeigt er **nur die Anzahl** aller
-Zigbee-Geräte:
+deCONZ-/Phoscon-Block. Im Hauptbildschirm zeigt er **nur die Anzahl** der
+physischen Zigbee-Geräte (konsolidiert, siehe unten):
 
 ```
-⬡ deCONZ  104 Geraete
+⬡ deCONZ  73 Geraete
 ```
 
 - Farbe: grün = alle verbunden, gelb = einzelne offline, rot = keine Verbindung
@@ -298,29 +323,46 @@ Zigbee-Geräte:
 - Ist das Gateway nicht erreichbar, bleiben die letzten Zahlen sichtbar
   (`nicht erreichbar (Daten vor …)`)
 
-### deCONZ-Modal (nach Typ gruppiert)
+### deCONZ-Modal (Typen, Akku, Konsolidierung)
 
 ```
 ╔════════════════════════════════════════════════════════════════════╗
 ║ DECONZ / PHOSCON: Phoscon-GW                                       ║
 ╠════════════════════════════════════════════════════════════════════╣
-║ 104 Geraete   91 verbunden  ·  13 offline (16 Typen)               ║
+║ 73 Geraete   63 verbunden  ·  10 offline (9 Typen)                 ║
 ║ Gateway 2.32.1 · Firmware 0x26780700 · Kanal 20                    ║
+║ Akku: 39 mit Akku · 3 schwach (<=25%) · 0 leer · 34 ohne           ║
+║ Konsolidiert: 104 Eintraege -> 73 Geraete                          ║
 ║────────────────────────────────────────────────────────────────────║
 ║ TYP                                           GES  ONLINE OFFLINE  ║
 ║ ▸ Bewegung/Praesenz                             15      14       1 ║
 ║ ▸ Steckdose                                     18      15       3 ║
 ║ ...                                                                ║
+║────────────────────────────────────────────────────────────────────║
+║ AKKU SCHWACH (<=25%)                                               ║
+║   Bett-schalter-Sarah-2025                                     16% ║
+║   OpenClose 80                                                 17% ║
+║   TRADFRI on/off switch 2                                      21% ║
 ╚════════════════════════════════════════════════════════════════════╝
 ```
 
-- gezählt werden deCONZ-`lights` und `sensors`
+- **Konsolidierung:** deCONZ legt pro Funktion oft eine eigene Ressource an
+  (z. B. Bewegung + Licht + Temperatur desselben Melders). `deconz.py`
+  gruppiert `lights` + `sensors` über die MAC aus der `uniqueid` zu **einem
+  physischen Gerät**. Aus 104 Ressourcen werden so 73 Geräte (74 inkl. Gateway)
 - „verbunden“ kommt aus `state.reachable` (Lights) bzw. `config.reachable`
-  (Sensoren); virtuelle Einträge (`Daylight`, `CLIPDaylightOffset`) gelten als
-  verbunden
+  (Sensoren); virtuelle Einträge (`Daylight`, `CLIPDaylightOffset`) zählen
+  weder als Gerät noch als offline
 - mehrere Roh-Typen werden zu lesbaren Gruppen zusammengefasst, z. B.
   `On/Off plug-in unit` + `Smart plug` → **Steckdose**
-- bei wenig Platz: `+N weitere Typen`
+- **Akku:** gezählt wird pro physischem Gerät (niedrigster Wert, falls mehrere
+  Ressourcen einen Batteriewert melden):
+  - `mit Akku` = Geräte mit Batteriewert
+  - `schwach` = ≤ 25 % (orange, Liste darunter mit Prozentwerten)
+  - `leer` = 0 %
+  - `ohne` = kein Batteriewert (Steckdosen, Lampen, virtuelle Geräte)
+- bei wenig Platz entfallen zuerst Gateway-Details und Akku-Liste, dann
+  `+N weitere Typen`
 
 Zugang in `config.json` (Modus 600, **nicht ins Repo**):
 
@@ -374,7 +416,7 @@ im Format `root@pam!backup-script=<value>` eintragen.
 
 ### Backup-Ziel (Storage)
 
-Die Backup-Funktion (`[5]` im Proxmox-Modal) nutzt den Storage, der in
+Die Backup-Funktion (`[5]` im Proxmox-Guest-Modal) nutzt den Storage, der in
 Proxmox den **Content-Typ `backup`** hat. `local` scheidet damit automatisch
 aus (Fehler: *"can't use storage 'local' for backups"*).
 

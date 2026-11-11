@@ -386,6 +386,97 @@ def build_proxmox_modal(modal, mw):
     return lines
 
 
+def open_node_modal(prox, node_index):
+    """Baut das Node-Modal (gesamten Proxmox-Server steuern)."""
+    nodes = (prox or {}).get("nodes") or []
+    if node_index < 0 or node_index >= len(nodes):
+        return None
+    return {
+        "type": "pve_node",
+        "node_idx": node_index,
+        "node": nodes[node_index],
+        "result": None,
+        "pending": None,
+    }
+
+
+def build_pve_node_modal(modal, mw):
+    """Node-Modal: Status + Herunterfahren/Neustart des ganzen Servers."""
+    node = modal.get("node") or {}
+    nd = node.get("node") or {}
+    label = node.get("label") or "PVE"
+    res = modal.get("result")
+    pending = modal.get("pending")
+    online = bool(node.get("online"))
+    lines = []
+
+    mbg = CLR["modalbg"]
+    mhi = CLR["modalhi"]
+
+    def mline(content):
+        return mbg + MBOX["v"] + " " + padto(content, mw - 4) + " " + MBOX["v"] + RST
+
+    def msep(char="\u2500"):
+        return mbg + MBOX["v"] + char * (mw - 2) + MBOX["v"] + RST
+
+    lines.append(mbg + MBOX["tl"] + MBOX["h"] * (mw - 2) + MBOX["tr"] + RST)
+    head = "PROXMOX SERVER: {}".format(label)
+    lines.append(mhi + MBOX["v"] + " " + padto(clip(head, mw - 4), mw - 4)
+                 + " " + MBOX["v"] + RST)
+    lines.append(mbg + MBOX["lt"] + MBOX["h"] * (mw - 2) + MBOX["rt"] + RST)
+
+    if online:
+        stat = CLR["green"] + BOLD + "ONLINE" + RST
+    else:
+        stat = CLR["red"] + BOLD + "OFFLINE" + RST
+    lines.append(mline("Node:    {} ({})".format(nd.get("name") or "-", stat)))
+    lines.append(mline("Uptime:  {}".format(human_uptime(nd.get("uptime", 0)))))
+
+    cpu = nd.get("cpu", 0)
+    mem, maxmem = nd.get("mem", 0), max(nd.get("maxmem", 1), 1)
+    dsk, maxdsk = nd.get("disk", 0), max(nd.get("maxdisk", 1), 1)
+    memf = mem / maxmem
+    dskf = dsk / maxdsk
+    lines.append(mline("CPU:     {} {:.0f}%".format(
+        bar(cpu / 100.0, 10, CLR["cyan"]), cpu)))
+    lines.append(mline("RAM:     {} {}/{} ({:.0f}%)".format(
+        bar(memf, 10, CLR["green"] if memf < 0.85 else CLR["orange"]),
+        human_bytes(mem), human_bytes(maxmem), memf * 100)))
+    lines.append(mline("Disk:    {} {}/{} ({:.0f}%)".format(
+        bar(dskf, 10, CLR["green"] if dskf < 0.85 else CLR["orange"]),
+        human_bytes(dsk), human_bytes(maxdsk), dskf * 100)))
+
+    guests = node.get("guests") or []
+    running = sum(1 for g in guests if g.get("status") == "running")
+    lines.append(mline("Gaeste:  {} laufend, {} gesamt".format(running, len(guests))))
+
+    lines.append(msep())
+
+    if pending:
+        action = "HERUNTERFAHREN" if pending == "shutdown" else "NEU STARTEN"
+        lines.append(mline(CLR["red"] + BOLD + "ACHTUNG: {} {}".format(
+            label, action) + RST))
+        lines.append(mline(CLR["gray"] + "Alle VMs/Container werden sauber beendet." + RST))
+        lines.append(mline(CLR["yellow"] + BOLD
+                           + "  [j] Ja, jetzt ausfuehren    [n] Abbrechen" + RST))
+    elif not online:
+        lines.append(mline(CLR["red"] + "Server nicht erreichbar - keine Aktionen" + RST))
+    else:
+        lines.append(mline(CLR["cyan"] + BOLD + "SERVER-AKTIONEN:" + RST))
+        lines.append(mline("  " + CLR["orange"] + "[s] Gesamten Server herunterfahren" + RST))
+        lines.append(mline("  " + CLR["yellow"] + "[r] Gesamten Server neu starten" + RST))
+        lines.append(mline(CLR["dark"] + "  (alle VMs/Container werden mit gestoppt)" + RST))
+
+    lines.append(msep())
+    if res:
+        lines.append(mline(CLR["orange"] + BOLD + clip(res, mw - 4) + RST))
+    else:
+        lines.append(mline(CLR["gray"] + "[ESC] oder [q] schliessen" + RST))
+
+    lines.append(mbg + MBOX["bl"] + MBOX["h"] * (mw - 2) + MBOX["br"] + RST)
+    return lines
+
+
 def build_device_modal(modal, mw):
     """Baut Box-Zeilen fuer Ping-Geraet Modal."""
     dev = modal["dev"]
@@ -582,6 +673,47 @@ def build_unifi_modal(modal, mw, max_rows=None):
     lines.append(mline(CLR["dark"] + "Modell: {}  \u00b7  Firmware: {}".format(
         ap.get("model_name") or ap.get("model") or "?", ver) + RST))
 
+    sat = ap.get("satisfaction")
+    qc = _quality_color(sat)
+    link = int(ap.get("uplink_speed") or 0)
+    maxlink = int(ap.get("uplink_max_speed") or 0)
+    cpu = ap.get("cpu")
+    mem = ap.get("mem")
+    link_c = (CLR["orange"] if (maxlink and link and link < maxlink)
+              else CLR["gray"])
+    link_txt = "{} Mbit/s".format(link) if link else "-"
+    if maxlink and link and link < maxlink:
+        link_txt += " (max {})".format(maxlink)
+    qtxt = "{}%".format(sat) if sat is not None else "?"
+    extra = []
+    if cpu is not None:
+        extra.append("CPU {:.0f}%".format(cpu))
+    if mem is not None:
+        extra.append("RAM {:.0f}%".format(mem))
+    qline = ("Qualitaet: {}{}{} ({})  \u00b7  Link: {}{}{}".format(
+        qc, BOLD, qtxt, _quality_text(sat),
+        link_c, link_txt, RST))
+    if extra:
+        qline += "  \u00b7  " + CLR["dark"] + " \u00b7 ".join(extra) + RST
+    lines.append(mline(qline))
+
+    band_names = {"ng": "2.4 GHz", "na": "5 GHz", "ac": "5 GHz",
+                  "ax": "6 GHz", "ad": "60 GHz"}
+    for radio in ap.get("radios") or []:
+        rq = radio.get("satisfaction")
+        rc = _quality_color(rq)
+        band = band_names.get(radio.get("radio"), radio.get("radio") or "?")
+        ch = radio.get("channel")
+        cu = radio.get("cu_total")
+        line = "  {}{:<7}{} Kanal {:<3}  {}Q{}{}  {:>2} Ger".format(
+            CLR["blue"], band, RST,
+            ch if ch is not None else "-",
+            rc, ("{}%".format(rq) if rq is not None else "?"), RST,
+            int(radio.get("num_sta") or 0))
+        if cu is not None:
+            line += CLR["dark"] + "  Last {}".format(cu) + "%" + RST
+        lines.append(mline(line))
+
     essids = {}
     for cl in clients:
         key = cl.get("essid") or "?"
@@ -648,7 +780,8 @@ LAST_LAYOUT = {}
 
 
 def render(w, h, state, prox, speed, uni, dc, frame, active_panel,
-           sel_dev, sel_guest, sel_ap, sel_dc, msg, modal):
+           sel_dev, sel_guest, sel_ap, sel_dc, msg, modal,
+           sel_node=0, sel_kind="guest"):
     """Baut den kompletten Screen (inkl. evtl. Modal-Overlay)."""
     rows = []
     devs = (state or {}).get("devices", {})
@@ -748,7 +881,11 @@ def render(w, h, state, prox, speed, uni, dc, frame, active_panel,
         l_border = CLR["dark"]
         r_border = CLR["cyan"] + BOLD
 
-    # Header-Linie
+    # Header-Linie (auf schmalen Terminals kuerzen)
+    if vlen(r_hdr) > RW - 2:
+        r_hdr = r_hdr.replace(" + UNIFI", "").replace(" CLUSTER", "")
+    if vlen(l_hdr) > LW - 2:
+        l_hdr = " GERAETE "
     l_bar = BOX["h"] * 2 + l_hdr + BOX["h"] * max(0, LW - 2 - len(l_hdr))
     r_bar = BOX["h"] * 2 + r_hdr + BOX["h"] * max(0, RW - 2 - len(r_hdr))
     top_line = (CLR["cyan"] + BOX["tl"] + RST
@@ -765,9 +902,12 @@ def render(w, h, state, prox, speed, uni, dc, frame, active_panel,
                                     sel_dev if active_panel == 0 else -1,
                                     dev_hits)
     prox_hits = []
-    prox_lines = build_proxmox_lines(prox, RW,
-                                     sel_guest if active_panel == 1 else -1,
-                                     prox_hits)
+    prox_lines = build_proxmox_lines(
+        prox, RW,
+        sel_guest if (active_panel == 1 and sel_kind == "guest") else -1,
+        prox_hits,
+        sel_node if (active_panel == 1 and sel_kind == "node") else -1,
+        sel_kind if active_panel == 1 else "guest")
     right_lines = list(prox_lines)
     rest = max(0, body_h - len(right_lines))
     uni_hits = []
@@ -805,10 +945,10 @@ def render(w, h, state, prox, speed, uni, dc, frame, active_panel,
             continue
         items.append({"panel": 0, "idx": di, "row": 3 + r,
                       "col": 1 + ci * (cw_dev + 1) + cw_dev // 2})
-    for r, gi in prox_hits:
+    for r, kind, idx in prox_hits:
         if r >= body_h:
             continue
-        items.append({"panel": 1, "idx": gi, "row": 3 + r,
+        items.append({"panel": 1, "idx": idx, "kind": kind, "row": 3 + r,
                       "col": LW + 2 + RW // 2})
     for off, ai in uni_hits:
         items.append({"panel": 2, "idx": ai, "row": 3 + len(prox_lines) + off,
@@ -821,6 +961,8 @@ def render(w, h, state, prox, speed, uni, dc, frame, active_panel,
     global LAST_LAYOUT
     LAST_LAYOUT = {
         "ap_hits": [(3 + len(prox_lines) + off, ai) for off, ai in uni_hits],
+        "pve_hits": [(3 + r, kind, idx) for r, kind, idx in prox_hits
+                     if r < body_h],
         "dc_hit": ((3 + len(prox_lines) + uni_len + dc_off + dc_hits[0])
                    if dc_hits else None),
         "items": items,
@@ -856,7 +998,7 @@ def render(w, h, state, prox, speed, uni, dc, frame, active_panel,
         foot = (" Tab=Geraete  \u2191\u2193\u2190\u2192=frei wechseln  Enter=deCONZ-Details  "
                 "c=Config  q=Ende")
     else:
-        foot = " Tab=Geraete/UniFi  \u2191\u2193=Waehlen  Enter=Aktions-Modal  s=Start  x=Stop  p=Refresh  c=Config  q=Ende"
+        foot = " Tab=Geraete/UniFi  \u2191\u2193=Waehlen  Enter=Node/Gast-Modal  s=Start  x=Stop  p=Refresh  c=Config  q=Ende"
     rows.append(CLR["footbg"] + padto(foot, w) + RST)
 
     while len(rows) < h:
@@ -876,6 +1018,9 @@ def render(w, h, state, prox, speed, uni, dc, frame, active_panel,
                 mw = min(60, w - 4)
                 if modal["type"] == "proxmox":
                     mlines = build_proxmox_modal(modal, mw)
+                elif modal["type"] == "pve_node":
+                    mw = min(64, w - 4)
+                    mlines = build_pve_node_modal(modal, mw)
                 elif modal["type"] == "device":
                     mlines = build_device_modal(modal, mw)
                 elif modal["type"] == "form":
@@ -980,7 +1125,8 @@ def build_device_lines(devs, state, w, sel_dev, hit_rows=None):
     return out
 
 
-def build_proxmox_lines(prox, w, sel_guest, hit_rows=None):
+def build_proxmox_lines(prox, w, sel_guest, hit_rows=None,
+                        sel_node=-1, sel_kind="guest"):
     """Proxmox-Panel: Nodes + Guests mit RAM-Bars und sauberem Highlight."""
     out = []
     if not prox or not prox.get("nodes"):
@@ -988,10 +1134,16 @@ def build_proxmox_lines(prox, w, sel_guest, hit_rows=None):
         return out
 
     gi = 0
-    for node in prox["nodes"]:
+    for ni, node in enumerate(prox["nodes"]):
         label = node.get("label", "PVE")
+        node_sel = sel_kind == "node" and sel_node == ni
         if not node.get("online"):
-            out.append(CLR["red"] + BOLD + "\u2b24 " + label + " OFFLINE" + RST)
+            head = CLR["red"] + BOLD + "\u2b24 " + label + " OFFLINE" + RST
+            if node_sel:
+                head = hl(head, w)
+            if hit_rows is not None:
+                hit_rows.append((len(out), "node", ni))
+            out.append(head)
             out.append("")
             gi += len(node.get("guests", []))
             continue
@@ -1001,6 +1153,10 @@ def build_proxmox_lines(prox, w, sel_guest, hit_rows=None):
         dskf = nd.get("disk", 0) / max(nd.get("maxdisk", 1), 1)
         up = human_uptime(nd.get("uptime", 0))
         head = "{}\u2b24 {}{}  {}up {}".format(CLR["green"], BOLD, label, RST, up)
+        if node_sel:
+            head = hl(head, w)
+        if hit_rows is not None:
+            hit_rows.append((len(out), "node", ni))
         out.append(head)
         info = "  CPU {} RAM {} DSK {}".format(
             bar(cpu / 100.0, 7, CLR["cyan"]),
@@ -1022,7 +1178,7 @@ def build_proxmox_lines(prox, w, sel_guest, hit_rows=None):
             memf = g["mem"] / max(g["maxmem"], 1) if running else 0
             typ = (CLR["blue"] if g["type"] == "VM" else CLR["cyan"]) + g["type"] + RST
             name = g["name"]
-            sel = (gi == sel_guest)
+            sel = (sel_kind == "guest" and gi == sel_guest)
             if running:
                 memtxt = "{}/{}".format(human_bytes(g["mem"]), human_bytes(g["maxmem"]))
                 membar = bar(memf, 6, CLR["green"] if memf < 0.85 else CLR["orange"])
@@ -1045,7 +1201,7 @@ def build_proxmox_lines(prox, w, sel_guest, hit_rows=None):
             if sel:
                 line = hl(line, w)
             if hit_rows is not None:
-                hit_rows.append((len(out), gi))
+                hit_rows.append((len(out), "guest", gi))
             out.append(line)
             gi += 1
         out.append("")
@@ -1065,13 +1221,42 @@ def _signal_color(sig):
     return CLR["red"]
 
 
+def _quality_color(q):
+    """Farbe fuer UniFi-Satisfaction/Qualitaet (0-100)."""
+    if q is None:
+        return CLR["dark"]
+    if q >= 90:
+        return CLR["green"]
+    if q >= 75:
+        return CLR["yellow"]
+    if q >= 60:
+        return CLR["orange"]
+    return CLR["red"]
+
+
+def _quality_text(q):
+    if q is None:
+        return "?"
+    if q >= 90:
+        return "sehr gut"
+    if q >= 75:
+        return "gut"
+    if q >= 60:
+        return "mittel"
+    return "schlecht"
+
+
 def _unifi_ap_line(ap, w):
     name = ap.get("name") or ap.get("mac") or "AP"
+    sat = ap.get("satisfaction")
+    qc = _quality_color(sat)
+    sat_txt = "  Q{}%".format(sat) if sat is not None else ""
     if ap.get("up"):
         dot = CLR["green"] + "\u25b2" + RST
-        head = "  {} {}{}".format(
+        head = "  {} {}{}{}".format(
             dot, name,
-            CLR["gray"] + "  up " + human_uptime(ap.get("uptime", 0)) + RST)
+            CLR["gray"] + "  up " + human_uptime(ap.get("uptime", 0)) + RST,
+            qc + sat_txt + RST)
         tail = "{} {} Ger".format(
             ap.get("model_name") or ap.get("model") or "",
             int(ap.get("num_sta") or 0)).strip()
@@ -1239,6 +1424,15 @@ def build_deconz_modal(modal, mw, max_rows=None):
     lines.append(mbg + MBOX["lt"] + MBOX["h"] * (mw - 2) + MBOX["rt"] + RST)
 
     total, online, offline = _deconz_counts(dc)
+    resources = int(dc.get("resources_total") or total)
+    bat_total = int(dc.get("battery_total") or 0)
+    bat_weak = int(dc.get("battery_weak") or 0)
+    bat_empty = int(dc.get("battery_empty") or 0)
+    bat_none = int(dc.get("battery_none")
+                   if dc.get("battery_none") is not None
+                   else total - bat_total)
+    weak_limit = int(dc.get("battery_weak_limit") or 25)
+
     stat = (CLR["green"] + BOLD + "{} verbunden".format(online) + RST
             + CLR["gray"] + "  \u00b7  " + RST
             + (CLR["red"] if offline else CLR["gray"])
@@ -1250,7 +1444,7 @@ def build_deconz_modal(modal, mw, max_rows=None):
         age = human_age(time.time() - (dc.get("ts") or 0))
         lines.append(mline(CLR["red"] + "Gateway nicht erreichbar"
                            + CLR["dark"] + " (Daten vor {})".format(age) + RST))
-    else:
+    elif max_rows is None or max_rows >= 16:
         fw = dc.get("fwversion") or "-"
         sw = dc.get("swversion") or "-"
         ch = dc.get("zigbeechannel")
@@ -1258,6 +1452,42 @@ def build_deconz_modal(modal, mw, max_rows=None):
         if ch:
             extra += " \u00b7 Kanal {}".format(ch)
         lines.append(mline(CLR["dark"] + clip(extra, mw - 4) + RST))
+
+    # ─── Akku-Uebersicht + Konsolidierung ───
+    wc = CLR["orange"] if bat_weak else CLR["gray"]
+    ec = CLR["red"] if bat_empty else CLR["gray"]
+    if mw >= 62:
+        battery = ("Akku: " + CLR["gray"] + "{} mit Akku".format(bat_total) + RST
+                   + CLR["gray"] + " \u00b7 " + RST
+                   + wc + "{} schwach (<={}%)".format(bat_weak, weak_limit) + RST
+                   + CLR["gray"] + " \u00b7 " + RST
+                   + ec + "{} leer".format(bat_empty) + RST
+                   + CLR["gray"] + " \u00b7 " + RST
+                   + CLR["dark"] + "{} ohne".format(bat_none) + RST)
+    else:
+        battery = ("Akku: " + CLR["gray"] + "{}".format(bat_total) + RST
+                   + CLR["gray"] + " \u00b7 " + RST
+                   + wc + "{} schwach".format(bat_weak) + RST
+                   + CLR["gray"] + " \u00b7 " + RST
+                   + ec + "{} leer".format(bat_empty) + RST
+                   + CLR["gray"] + " \u00b7 " + RST
+                   + CLR["dark"] + "{} ohne".format(bat_none) + RST)
+    lines.append(mline(battery))
+    if resources and resources > total and (max_rows is None or max_rows >= 16):
+        lines.append(mline(
+            CLR["dark"] + "Konsolidiert: {} Eintraege -> {} Geraete".format(
+                resources, total) + RST))
+
+    # Schwache Akkus fuer die Detail-Liste sammeln
+    weak_devs = []
+    for grp in groups:
+        for dev in grp.get("devices") or []:
+            b = dev.get("battery")
+            if b is not None and int(b) <= weak_limit:
+                weak_devs.append((int(b), dev.get("name") or "?"))
+    weak_devs.sort(key=lambda x: (x[0], x[1].lower()))
+    show_weak = max_rows is None or max_rows >= 24
+    weak_cap = min(len(weak_devs), 5) if show_weak else 0
 
     lines.append(msep())
     inner = mw - 4
@@ -1269,8 +1499,16 @@ def build_deconz_modal(modal, mw, max_rows=None):
 
     budget = None
     if max_rows is not None:
-        # Platz fuer Rahmen, Fusszeile und ggf. "+N weitere Typen"
-        budget = max(0, max_rows - len(lines) - 4)
+        weak_block = ((2 + weak_cap + (1 if len(weak_devs) > weak_cap else 0))
+                      if (weak_devs and weak_cap) else 0)
+        # Rahmen-Tail: Trenner + Fusszeile + unterer Rahmen; plus Reserve "+N weitere"
+        budget = max(0, max_rows - len(lines) - 3 - weak_block - 1)
+        if budget < 3 and weak_cap:
+            # Kleines Terminal: zuerst die Akku-Liste kuerzen
+            weak_cap = max(0, weak_cap - (4 - budget))
+            weak_block = ((2 + weak_cap + (1 if len(weak_devs) > weak_cap else 0))
+                          if weak_cap else 0)
+            budget = max(0, max_rows - len(lines) - 3 - weak_block - 1)
     shown = 0
     for grp in groups:
         if budget is not None and shown >= budget:
@@ -1296,6 +1534,21 @@ def build_deconz_modal(modal, mw, max_rows=None):
     if shown < len(groups):
         lines.append(mline(CLR["dark"] + "+{} weitere Typen".format(
             len(groups) - shown) + RST))
+
+    # ─── Schwache Akkus ───
+    if weak_devs and weak_cap:
+        lines.append(msep())
+        lines.append(mline(CLR["orange"] + BOLD
+                           + "AKKU SCHWACH (<={}%)".format(weak_limit) + RST))
+        for b, name in weak_devs[:weak_cap]:
+            bc = CLR["red"] if b <= 10 else CLR["orange"]
+            name_w = max(6, inner - 7)
+            row = ("  " + padto(clip(name, name_w), name_w)
+                   + bc + "{:>4}%".format(b) + RST)
+            lines.append(mline(row))
+        if len(weak_devs) > weak_cap:
+            lines.append(mline(CLR["dark"] + "+{} weitere".format(
+                len(weak_devs) - weak_cap) + RST))
 
     lines.append(msep())
     lines.append(mline(CLR["gray"] + "[ESC] oder [q] schliessen" + RST))
@@ -1420,25 +1673,59 @@ def guest_action(node_idx, node_name, vmid, gtype, action):
         return "Fehler: {}".format(str(e)[:55])
 
 
+def node_action(node_idx, node_name, action):
+    """POST an PVE-API: gesamten Node herunterfahren oder neu starten."""
+    nodes = CFG.get("proxmox_nodes", [])
+    if node_idx >= len(nodes):
+        return "Node-Index ungueltig"
+    nc = nodes[node_idx]
+
+    url = "{}/api2/json/nodes/{}/status".format(
+        nc["url"].rstrip("/"), node_name)
+    data = urllib.parse.urlencode({"command": action}).encode("utf-8")
+    req = urllib.request.Request(url, data=data, method="POST")
+    req.add_header("Authorization", "PVEAPIToken=" + nc["token"])
+    try:
+        urllib.request.urlopen(req, timeout=15, context=_CTX)
+        word = "Herunterfahren" if action == "shutdown" else "Neustart"
+        return "{} {} gestartet".format(word, node_name)
+    except urllib.error.HTTPError as e:
+        return "Fehler: " + _api_error(e)[:55]
+    except Exception as e:
+        return "Fehler: {}".format(str(e)[:55])
+
+
 # ═══════════════════════════════════════════════════════════════════
 # INPUT-PARSER (ROBUST & NON-BLOCKING)
 # ═══════════════════════════════════════════════════════════════════
 
-def _selection(panel, sel_dev, sel_guest, sel_ap, sel_dc):
-    return {0: sel_dev, 1: sel_guest, 2: sel_ap, 3: sel_dc}.get(panel, 0)
+def _selection(panel, sel_dev, sel_guest, sel_ap, sel_dc, sel_node=0,
+               sel_kind="guest"):
+    if panel == 1:
+        return (sel_node if sel_kind == "node" else sel_guest), sel_kind
+    return {0: sel_dev, 2: sel_ap, 3: sel_dc}.get(panel, 0), None
 
 
-def spatial_target(panel, sel_dev, sel_guest, sel_ap, sel_dc, key):
+def spatial_target(panel, sel_dev, sel_guest, sel_ap, sel_dc, key,
+                   sel_node=0, sel_kind="guest"):
     """Naechstes selektierbares Element in Pfeilrichtung (2D, frei)."""
     items = LAST_LAYOUT.get("items") or []
     if not items:
         return None
     cur = None
-    idx = _selection(panel, sel_dev, sel_guest, sel_ap, sel_dc)
+    idx, kind = _selection(panel, sel_dev, sel_guest, sel_ap, sel_dc,
+                           sel_node, sel_kind)
     for it in items:
-        if it["panel"] == panel and it["idx"] == idx:
+        if it["panel"] == panel and it["idx"] == idx and (
+                panel != 1 or it.get("kind") == kind):
             cur = it
             break
+    if cur is None:
+        for it in items:
+            if it["panel"] == panel and (
+                    panel != 1 or it.get("kind") == kind):
+                cur = it
+                break
     if cur is None:
         for it in items:
             if it["panel"] == panel:
@@ -1473,7 +1760,8 @@ def spatial_target(panel, sel_dev, sel_guest, sel_ap, sel_dc, key):
 
 
 def handle_input(data, active_panel, sel_dev, sel_guest, sel_ap, sel_dc,
-                 num_devs, num_guests, num_aps, num_dc, modal):
+                 num_devs, num_guests, num_aps, num_dc, modal,
+                 sel_node=0, sel_kind="guest"):
     """
     Parst beliebige Terminal-Sequenzen vollstaendig und nicht-blockierend.
     Returns: dict mit 'quit', 'active_panel', 'sel_dev', 'sel_guest',
@@ -1487,6 +1775,8 @@ def handle_input(data, active_panel, sel_dev, sel_guest, sel_ap, sel_dc,
         "sel_guest": sel_guest,
         "sel_ap": sel_ap,
         "sel_dc": sel_dc,
+        "sel_node": sel_node,
+        "sel_kind": sel_kind,
         "action": None,
         "modal_action": None,
         "open_modal": False,
@@ -1499,14 +1789,20 @@ def handle_input(data, active_panel, sel_dev, sel_guest, sel_ap, sel_dc,
     def move(key):
         """Raeumliche Navigation: naechstes Element in Richtung key."""
         tgt = spatial_target(res["active_panel"], res["sel_dev"],
-                             res["sel_guest"], res["sel_ap"], res["sel_dc"], key)
+                             res["sel_guest"], res["sel_ap"], res["sel_dc"],
+                             key, res["sel_node"], res["sel_kind"])
         if not tgt:
             return
         res["active_panel"] = tgt["panel"]
         if tgt["panel"] == 0:
             res["sel_dev"] = tgt["idx"]
         elif tgt["panel"] == 1:
-            res["sel_guest"] = tgt["idx"]
+            if tgt.get("kind") == "node":
+                res["sel_node"] = tgt["idx"]
+                res["sel_kind"] = "node"
+            else:
+                res["sel_guest"] = tgt["idx"]
+                res["sel_kind"] = "guest"
         elif tgt["panel"] == 2:
             res["sel_ap"] = tgt["idx"]
         else:
@@ -1663,6 +1959,16 @@ def handle_input(data, active_panel, sel_dev, sel_guest, sel_ap, sel_dc,
                     res["modal_action"] = "notify"
                 elif b == 0x20:
                     res["modal_action"] = "pause"
+            elif modal["type"] == "pve_node":
+                if modal.get("pending"):
+                    if c in ("j", "J"):
+                        res["modal_action"] = "confirm_node"
+                    elif c in ("n", "N"):
+                        res["modal_action"] = "cancel_node"
+                elif c in ("s", "S"):
+                    res["modal_action"] = "shutdown_node"
+                elif c in ("r", "R"):
+                    res["modal_action"] = "reboot_node"
             i += 1
             continue
 
@@ -1922,6 +2228,8 @@ def main():
     sel_guest = 0
     sel_ap = 0
     sel_dc = 0
+    sel_node = 0
+    sel_kind = "guest"
     msg = None
     msg_until = 0
     modal = None
@@ -1949,6 +2257,9 @@ def main():
                 sel_dev = max(0, len(dev_items) - 1)
             if sel_guest >= len(guest_items):
                 sel_guest = max(0, len(guest_items) - 1)
+            n_nodes = len((prox or {}).get("nodes") or [])
+            if sel_node >= n_nodes:
+                sel_node = max(0, n_nodes - 1)
             if sel_ap >= len(ap_items):
                 sel_ap = max(0, len(ap_items) - 1)
             if active_panel == 2 and not ap_items:
@@ -1966,6 +2277,11 @@ def main():
                                         if c.get("ap_mac") == mac]
             if modal and modal.get("type") == "deconz":
                 modal["data"] = dc or modal.get("data")
+            if modal and modal.get("type") == "pve_node":
+                ni = modal.get("node_idx", 0)
+                nodes = (prox or {}).get("nodes") or []
+                if 0 <= ni < len(nodes):
+                    modal["node"] = nodes[ni]
 
             # Offenes AP-Modal mit frischen Daten versorgen
             if modal and modal.get("type") == "unifi":
@@ -1988,7 +2304,7 @@ def main():
 
             rows = render(w, h, state, prox, speed, uni, dc, frame,
                           active_panel, sel_dev, sel_guest, sel_ap, sel_dc,
-                          msg, modal)
+                          msg, modal, sel_node, sel_kind)
             safe_write(ESC + "[H" + "\n".join(rows) + RST)
             frame += 1
 
@@ -2015,19 +2331,44 @@ def main():
                     kind = m.group(4)
                     if kind == b"M" and btn == 0:
                         hit = False
-                        for yy, ai in LAST_LAYOUT.get("ap_hits", []):
-                            if (yy == my
-                                    and LAST_LAYOUT.get("x0", 0) <= mx
-                                    <= LAST_LAYOUT.get("x1", -1)):
-                                active_panel = 2
-                                sel_ap = ai
-                                modal = open_unifi_modal(uni, ai)
-                                hit = True
+                        x0 = LAST_LAYOUT.get("x0", 0)
+                        x1 = LAST_LAYOUT.get("x1", -1)
+                        if x0 <= mx <= x1:
+                            for yy, pkind, idx in LAST_LAYOUT.get("pve_hits", []):
+                                if yy != my:
+                                    continue
+                                active_panel = 1
+                                if pkind == "node":
+                                    sel_node = idx
+                                    sel_kind = "node"
+                                    modal = open_node_modal(prox, idx)
+                                elif 0 <= idx < len(guest_items):
+                                    sel_guest = idx
+                                    sel_kind = "guest"
+                                    ni, g = guest_items[idx]
+                                    node = prox["nodes"][ni]
+                                    modal = {
+                                        "type": "proxmox",
+                                        "guest": g,
+                                        "node_name": node["node"]["name"],
+                                        "node_idx": ni,
+                                        "node_label": node.get("label", ""),
+                                        "result": None,
+                                    }
+                                hit = bool(modal)
                                 break
+                        if not hit:
+                            for yy, ai in LAST_LAYOUT.get("ap_hits", []):
+                                if (yy == my
+                                        and x0 <= mx <= x1):
+                                    active_panel = 2
+                                    sel_ap = ai
+                                    modal = open_unifi_modal(uni, ai)
+                                    hit = True
+                                    break
                         if (not hit and dc
                                 and LAST_LAYOUT.get("dc_hit") == my
-                                and LAST_LAYOUT.get("x0", 0) <= mx
-                                <= LAST_LAYOUT.get("x1", -1)):
+                                and x0 <= mx <= x1):
                             active_panel = 3
                             sel_dc = 0
                             modal = open_deconz_modal(dc)
@@ -2037,7 +2378,8 @@ def main():
 
             inp = handle_input(data, active_panel, sel_dev, sel_guest, sel_ap,
                                sel_dc, len(dev_items), len(guest_items),
-                               len(ap_items), 1 if has_dc else 0, modal)
+                               len(ap_items), 1 if has_dc else 0, modal,
+                               sel_node, sel_kind)
 
             if inp["quit"]:
                 break
@@ -2047,6 +2389,8 @@ def main():
             sel_guest = inp["sel_guest"]
             sel_ap = inp["sel_ap"]
             sel_dc = inp["sel_dc"]
+            sel_node = inp["sel_node"]
+            sel_kind = inp["sel_kind"]
 
             # Modal oeffnen
             if inp["open_modal"] and not modal:
@@ -2054,6 +2398,8 @@ def main():
                     modal = open_deconz_modal(dc)
                 elif active_panel == 2 and ap_items:
                     modal = open_unifi_modal(uni, sel_ap)
+                elif active_panel == 1 and sel_kind == "node":
+                    modal = open_node_modal(prox, sel_node)
                 elif active_panel == 1 and guest_items:
                     ni, g = guest_items[sel_guest]
                     node = prox["nodes"][ni]
@@ -2115,6 +2461,25 @@ def main():
                     # Proxmox-Poller triggern damit Status frisch wird
                     subprocess.Popen([sys.executable, os.path.join(HERE, "proxmox.py")],
                                      stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+                elif modal["type"] == "pve_node":
+                    if mact in ("shutdown_node", "reboot_node"):
+                        modal["pending"] = ("shutdown" if mact == "shutdown_node"
+                                            else "reboot")
+                        modal["result"] = None
+                    elif mact == "confirm_node":
+                        action = modal.get("pending")
+                        modal["pending"] = None
+                        if action:
+                            nd = ((modal.get("node") or {}).get("node") or {})
+                            res = node_action(modal["node_idx"],
+                                              nd.get("name") or "", action)
+                            modal["result"] = res
+                            subprocess.Popen(
+                                [sys.executable, os.path.join(HERE, "proxmox.py")],
+                                stdout=subprocess.DEVNULL,
+                                stderr=subprocess.DEVNULL)
+                    elif mact == "cancel_node":
+                        modal["pending"] = None
                 elif modal["type"] == "device" and mact == "ping":
                     subprocess.Popen([sys.executable, os.path.join(HERE, "checker.py")],
                                      stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
@@ -2179,12 +2544,14 @@ def main():
                     CFG = load(CONFIG) or CFG
                     msg = "{} {}".format(d["name"], "pausiert" if newp else "wieder aktiv")
                     msg_until = time.time() + 3
-            elif act == "quick_start" and guest_items and active_panel == 1:
+            elif (act == "quick_start" and guest_items and active_panel == 1
+                  and sel_kind == "guest"):
                 ni, g = guest_items[sel_guest]
                 node_name = prox["nodes"][ni]["node"]["name"]
                 msg = guest_action(ni, node_name, g["vmid"], g["type"], "start")
                 msg_until = time.time() + 3
-            elif act == "quick_stop" and guest_items and active_panel == 1:
+            elif (act == "quick_stop" and guest_items and active_panel == 1
+                  and sel_kind == "guest"):
                 ni, g = guest_items[sel_guest]
                 node_name = prox["nodes"][ni]["node"]["name"]
                 msg = guest_action(ni, node_name, g["vmid"], g["type"], "shutdown")

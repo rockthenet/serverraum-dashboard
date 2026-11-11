@@ -135,6 +135,13 @@ def _lower(value):
     return (value or "").lower()
 
 
+def _float(value):
+    try:
+        return float(value)
+    except (TypeError, ValueError):
+        return None
+
+
 def poll(cfg):
     """Fragt den Controller komplett ab und liefert das Ausgabe-Dict."""
     uni_cfg = cfg.get("unifi") or {}
@@ -173,6 +180,22 @@ def poll(cfg):
         mac = _lower(dev.get("mac"))
         name = dev.get("name") or mac or "AP"
         model = dev.get("model") or ""
+        uplink = dev.get("uplink") or {}
+        system_stats = dev.get("system-stats") or {}
+        radios = []
+        for radio in dev.get("radio_table_stats") or []:
+            radios.append({
+                "name": radio.get("name") or "",
+                "radio": radio.get("radio") or "",
+                "channel": radio.get("channel"),
+                "satisfaction": _int(radio.get("satisfaction"))
+                                if radio.get("satisfaction") is not None else None,
+                "cu_total": _int(radio.get("cu_total"))
+                            if radio.get("cu_total") is not None else None,
+                "tx_power": radio.get("tx_power"),
+                "num_sta": _int(radio.get("num_sta")),
+                "state": radio.get("state") or "",
+            })
         rec = {
             "name": name,
             "mac": mac,
@@ -184,6 +207,15 @@ def poll(cfg):
             "ip": dev.get("ip") or "",
             "version": dev.get("version") or dev.get("displayable_version") or "",
             "uptime": _int(dev.get("uptime")),
+            "satisfaction": (int(dev.get("satisfaction"))
+                             if dev.get("satisfaction") is not None else None),
+            "uplink_speed": _int(uplink.get("speed")),
+            "uplink_max_speed": _int(uplink.get("max_speed")),
+            "uplink_name": uplink.get("name") or "",
+            "uplink_up": bool(uplink.get("up", True)),
+            "cpu": _float(system_stats.get("cpu")),
+            "mem": _float(system_stats.get("mem")),
+            "radios": radios,
         }
         aps.append(rec)
         ap_by_mac[mac] = name
