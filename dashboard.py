@@ -9,6 +9,7 @@ Steuerung:
   Tab / Links / Rechts    Panel wechseln (Geraete <-> Proxmox)
   Pfeil Oben / Unten      Geraet oder Guest auswaehlen (auch j / k)
   Enter                   Lightbox-Modal oeffnen (Aktionen & Details)
+  f                       FRITZ!Box-Details (Leitung, Auslastung, Traffic)
   q                       Modal schliessen (wenn offen) bzw. Dashboard beenden
   r                       Ping-Check sofort ausfuehren
   p                       Proxmox-Status sofort neu abfragen
@@ -80,6 +81,7 @@ HERE = os.path.dirname(os.path.abspath(__file__))
 STATE = os.path.join(HERE, "state.json")
 PROX = os.path.join(HERE, "proxmox.json")
 SPEED = os.path.join(HERE, "speed.json")
+FRITZ = os.path.join(HERE, "fritzbox.json")
 UNI = os.path.join(HERE, "unifi.json")
 DECONZ = os.path.join(HERE, "deconz.json")
 CONFIG = os.path.join(HERE, "config.json")
@@ -477,6 +479,90 @@ def build_pve_node_modal(modal, mw):
     return lines
 
 
+def build_fritz_modal(modal, mw):
+    """FRITZ!Box-Modal: Leitungsrate, aktuelle Auslastung und Traffic."""
+    fb = modal.get("data") or {}
+    lines = []
+
+    mbg = CLR["modalbg"]
+    mhi = CLR["modalhi"]
+
+    def mline(content):
+        return mbg + MBOX["v"] + " " + padto(content, mw - 4) + " " + MBOX["v"] + RST
+
+    def msep(char="\u2500"):
+        return mbg + MBOX["v"] + char * (mw - 2) + MBOX["v"] + RST
+
+    def rate(value, digits=1):
+        return format((value or 0) / 1e6, ".{}f".format(digits))
+
+    lines.append(mbg + MBOX["tl"] + MBOX["h"] * (mw - 2) + MBOX["tr"] + RST)
+    head = (fb.get("model") or "FRITZ!Box").upper()
+    lines.append(mhi + MBOX["v"] + " " + padto(clip(head, mw - 4), mw - 4)
+                 + " " + MBOX["v"] + RST)
+    lines.append(mbg + MBOX["lt"] + MBOX["h"] * (mw - 2) + MBOX["rt"] + RST)
+
+    if not fb.get("ok"):
+        err = fb.get("error") or "keine Daten"
+        lines.append(mline(CLR["red"] + BOLD + "NICHT ERREICHBAR" + RST))
+        lines.append(mline(CLR["gray"] + clip(err, mw - 4) + RST))
+        if fb.get("ts"):
+            lines.append(mline(CLR["dark"] + "Letzte Daten: "
+                               + fmt_ts(fb.get("ts")) + RST))
+        lines.append(msep())
+        lines.append(mline(CLR["gray"] + "[ESC] oder [q] schliessen" + RST))
+        lines.append(mbg + MBOX["bl"] + MBOX["h"] * (mw - 2) + MBOX["br"] + RST)
+        return lines
+
+    fw = fb.get("firmware") or "-"
+    hw = fb.get("hardware") or ""
+    fw_txt = "Firmware: {}".format(fw)
+    if hw and hw != fb.get("model"):
+        fw_txt += " ({})".format(hw)
+    lines.append(mline("Modell:   {}".format(fb.get("model") or "-")))
+    lines.append(mline(clip(fw_txt, mw - 4)))
+    status = fb.get("link_status") or "-"
+    access = fb.get("access_type") or ""
+    scol = CLR["green"] if status.lower() == "up" else CLR["red"]
+    lines.append(mline("Status:   {}{}{}{}{}".format(
+        scol, BOLD, status, RST, " / " + access if access else "")))
+    lines.append(mline("Uptime:   {}".format(human_uptime(fb.get("uptime", 0)))))
+
+    lines.append(msep())
+    lines.append(mline(CLR["cyan"] + BOLD + "LEITUNG (Anbieter)" + RST))
+    lines.append(mline("  {}\u2193 {} Mbps{}   {}\u2191 {} Mbps{}".format(
+        CLR["cyan"], rate(fb.get("down_bps")), RST,
+        CLR["cyan"], rate(fb.get("up_bps")), RST)))
+
+    down_f = (fb.get("down_cur_bps") or 0) / max(fb.get("down_bps") or 1, 1)
+    up_f = (fb.get("up_cur_bps") or 0) / max(fb.get("up_bps") or 1, 1)
+    lines.append(mline(CLR["cyan"] + BOLD + "AKTUELL" + RST))
+    lines.append(mline("  \u2193 {} {:>6} Mbps".format(
+        bar(down_f, 8, CLR["green"] if down_f < 0.8 else CLR["orange"]),
+        rate(fb.get("down_cur_bps"), 2))))
+    lines.append(mline("  \u2191 {} {:>6} Mbps".format(
+        bar(up_f, 8, CLR["green"] if up_f < 0.8 else CLR["orange"]),
+        rate(fb.get("up_cur_bps"), 2))))
+
+    lines.append(mline("Spitze:   \u2193 {}   \u2191 {} Mbps".format(
+        rate(fb.get("down_peak_bps")), rate(fb.get("up_peak_bps")))))
+    rx = fb.get("bytes_received") or 0
+    tx = fb.get("bytes_sent") or 0
+    if rx or tx:
+        lines.append(mline("Traffic:  \u2193 {}   \u2191 {}".format(
+            human_bytes(rx), human_bytes(tx))))
+    grp = fb.get("sync_group") or ""
+    mode = fb.get("sync_mode") or ""
+    if grp:
+        lines.append(mline(CLR["dark"] + "Sync: {} ({})".format(grp, mode) + RST))
+
+    lines.append(msep())
+    lines.append(mline(CLR["gray"] + "Stand {}   [ESC]/[q] schliessen".format(
+        fmt_ts(fb.get("ts"))) + RST))
+    lines.append(mbg + MBOX["bl"] + MBOX["h"] * (mw - 2) + MBOX["br"] + RST)
+    return lines
+
+
 def build_device_modal(modal, mw):
     """Baut Box-Zeilen fuer Ping-Geraet Modal."""
     dev = modal["dev"]
@@ -781,7 +867,7 @@ LAST_LAYOUT = {}
 
 def render(w, h, state, prox, speed, uni, dc, frame, active_panel,
            sel_dev, sel_guest, sel_ap, sel_dc, msg, modal,
-           sel_node=0, sel_kind="guest"):
+           sel_node=0, sel_kind="guest", fb=None):
     """Baut den kompletten Screen (inkl. evtl. Modal-Overlay)."""
     rows = []
     devs = (state or {}).get("devices", {})
@@ -841,23 +927,43 @@ def render(w, h, state, prox, speed, uni, dc, frame, active_panel,
     dev_txt = oc + "{}/{} Geraete".format(online, total) + RST
     if paused_n:
         dev_txt += CLR["gray"] + " \u23f8{}".format(paused_n) + RST
-    if speed and speed.get("ok"):
-        sp = "{}\u2193{:.1f}{} / {}\u2191{:.1f}{} Mbps".format(
-            CLR["cyan"], speed["download_mbps"], RST,
-            CLR["cyan"], speed["upload_mbps"], RST)
+    sp_variants = []
+    if fb and fb.get("ok") and fb.get("down_bps"):
+        dm = (fb.get("down_bps") or 0) / 1e6
+        um = (fb.get("up_bps") or 0) / 1e6
+        cdm = (fb.get("down_cur_bps") or 0) / 1e6
+        cum = (fb.get("up_cur_bps") or 0) / 1e6
+        sp_variants.append(
+            "{}WAN \u2193{:.1f}{} / {}\u2191{:.1f}{} Mbps {}jetzt {:.2f}/{:.2f}{}".format(
+                CLR["cyan"], dm, RST, CLR["cyan"], um, RST,
+                CLR["dark"], cdm, cum, RST))
+        sp_variants.append(
+            "{}WAN \u2193{:.1f}{} / {}\u2191{:.1f}{} Mbps".format(
+                CLR["cyan"], dm, RST, CLR["cyan"], um, RST))
+        sp_variants.append(
+            "{}WAN {:.0f}/{:.0f} Mbps{}".format(CLR["cyan"], dm, um, RST))
+    elif speed and speed.get("ok"):
+        sp_variants.append(
+            "{}\u2193{:.1f}{} / {}\u2191{:.1f}{} Mbps".format(
+                CLR["cyan"], speed["download_mbps"], RST,
+                CLR["cyan"], speed["upload_mbps"], RST))
     else:
-        sp = CLR["dark"] + "Speedtest..." + RST
+        sp_variants.append(CLR["dark"] + "Speedtest..." + RST)
     cd = 1.0 - (ago / poll if poll else 0)
 
     stat = None
-    for conn in conn_variants:
-        head_txt = " {}{}   {}   {}   next ".format(inet, conn, dev_txt, sp)
-        avail = w - vlen(head_txt)
-        if avail >= 3:
-            stat = head_txt + bar(cd, min(10, avail), CLR["blue"])
+    for sp in sp_variants:
+        for conn in conn_variants:
+            head_txt = " {}{}   {}   {}   next ".format(inet, conn, dev_txt, sp)
+            avail = w - vlen(head_txt)
+            if avail >= 3:
+                stat = head_txt + bar(cd, min(10, avail), CLR["blue"])
+                break
+        if stat is not None:
             break
     if stat is None:
-        stat = " {}   {}   {}   next ".format(inet, dev_txt, sp) + bar(cd, 10, CLR["blue"])
+        stat = " {}   {}   {}   next ".format(
+            inet, dev_txt, sp_variants[-1]) + bar(cd, 10, CLR["blue"])
     rows.append(padto(stat, w))
 
     # ─── Row 2: obere Trennlinie mit Panel-Beschriftung ───
@@ -966,6 +1072,7 @@ def render(w, h, state, prox, speed, uni, dc, frame, active_panel,
         "dc_hit": ((3 + len(prox_lines) + uni_len + dc_off + dc_hits[0])
                    if dc_hits else None),
         "items": items,
+        "fritz_hit": 1 if (fb and fb.get("ok")) else None,
         "x0": LW + 2,
         "x1": LW + 2 + RW - 1,
     }
@@ -990,15 +1097,15 @@ def render(w, h, state, prox, speed, uni, dc, frame, active_panel,
         foot = " [j] Ja  [n]/[ESC] Nein"
     elif active_panel == 0:
         foot = (" Tab=Proxmox  \u2191\u2193=Waehlen  Enter=Details  a=Neu  Space=Pause  "
-                "d=Loeschen  c=Config  r=Ping  q=Ende")
+                "d=Loeschen  f=FritzBox  c=Config  r=Ping  q=Ende")
     elif active_panel == 2:
         foot = (" Tab=Geraete  \u2191\u2193=AP waehlen  Enter=Geraete am AP  "
-                "c=Config  q=Ende")
+                "f=FritzBox  c=Config  q=Ende")
     elif active_panel == 3:
         foot = (" Tab=Geraete  \u2191\u2193\u2190\u2192=frei wechseln  Enter=deCONZ-Details  "
-                "c=Config  q=Ende")
+                "f=FritzBox  c=Config  q=Ende")
     else:
-        foot = " Tab=Geraete/UniFi  \u2191\u2193=Waehlen  Enter=Node/Gast-Modal  s=Start  x=Stop  p=Refresh  c=Config  q=Ende"
+        foot = " Tab=Geraete/UniFi  \u2191\u2193=Waehlen  Enter=Node/Gast-Modal  f=FritzBox  s=Start  x=Stop  p=Refresh  c=Config  q=Ende"
     rows.append(CLR["footbg"] + padto(foot, w) + RST)
 
     while len(rows) < h:
@@ -1021,6 +1128,9 @@ def render(w, h, state, prox, speed, uni, dc, frame, active_panel,
                 elif modal["type"] == "pve_node":
                     mw = min(64, w - 4)
                     mlines = build_pve_node_modal(modal, mw)
+                elif modal["type"] == "fritz":
+                    mw = min(66, w - 4)
+                    mlines = build_fritz_modal(modal, mw)
                 elif modal["type"] == "device":
                     mlines = build_device_modal(modal, mw)
                 elif modal["type"] == "form":
@@ -1984,6 +2094,8 @@ def handle_input(data, active_panel, sel_dev, sel_guest, sel_ap, sel_dc,
             res["action"] = "add_device"
         elif c in ("c", "C"):
             res["action"] = "config"
+        elif c in ("f", "F"):
+            res["action"] = "fritz"
         elif c in ("d", "D"):
             res["action"] = "delete_device"
         elif b == 0x20:
@@ -2245,6 +2357,7 @@ def main():
             state = load(STATE)
             prox = load(PROX)
             speed = load(SPEED)
+            fb = load(FRITZ)
             uni = load(UNI)
             dc = load(DECONZ)
 
@@ -2282,6 +2395,8 @@ def main():
                 nodes = (prox or {}).get("nodes") or []
                 if 0 <= ni < len(nodes):
                     modal["node"] = nodes[ni]
+            if modal and modal.get("type") == "fritz":
+                modal["data"] = fb or modal.get("data")
 
             # Offenes AP-Modal mit frischen Daten versorgen
             if modal and modal.get("type") == "unifi":
@@ -2304,7 +2419,7 @@ def main():
 
             rows = render(w, h, state, prox, speed, uni, dc, frame,
                           active_panel, sel_dev, sel_guest, sel_ap, sel_dc,
-                          msg, modal, sel_node, sel_kind)
+                          msg, modal, sel_node, sel_kind, fb=fb)
             safe_write(ESC + "[H" + "\n".join(rows) + RST)
             frame += 1
 
@@ -2331,6 +2446,9 @@ def main():
                     kind = m.group(4)
                     if kind == b"M" and btn == 0:
                         hit = False
+                        if my == LAST_LAYOUT.get("fritz_hit"):
+                            modal = {"type": "fritz", "data": fb}
+                            hit = True
                         x0 = LAST_LAYOUT.get("x0", 0)
                         x1 = LAST_LAYOUT.get("x1", -1)
                         if x0 <= mx <= x1:
@@ -2528,6 +2646,8 @@ def main():
                 modal = open_add_form(gid0)
             elif act == "config":
                 modal = open_config_form()
+            elif act == "fritz":
+                modal = {"type": "fritz", "data": fb}
             elif act == "delete_device" and active_panel == 0 and dev_items:
                 gid, lbl, d = dev_items[sel_dev]
                 modal = {

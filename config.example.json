@@ -3,6 +3,7 @@
   "fping_timeout": 800,
   "http_timeout": 3,
   "speedtest_interval_min": 30,
+  "fritzbox_interval_sec": 60,
   "offline_after": 3,
   "online_after": 2,
   "groups": {
@@ -334,5 +335,13 @@
     "url": "http://192.168.178.247",
     "apikey": "DEIN-DECONZ-API-KEY",
     "timeout": 6
+  },
+  "fritzbox": {
+    "enabled": true,
+    "host": "192.168.178.1",
+    "port": 49000,
+    "user": "fritz3219",
+    "password": "DEIN-FRITZBOX-PASSWORT",
+    "timeout": 8
   }
 }

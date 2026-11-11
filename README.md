@@ -7,7 +7,8 @@ remote per SSH erreichbar.
 Zeigt in einem mehrspaltigen ASCII-Layout:
 
 - **Erreichbarkeit** aller Netzwerk-Geräte (Ping + optionaler HTTP-Check), gruppiert
-- **Internet-Status** inkl. Verbindungsart (LAN/WLAN, IP, SSID) + regelmäßiger **Speedtest** (Down/Up)
+- **Internet-Status** inkl. Verbindungsart (LAN/WLAN, IP, SSID) + **WAN-Leitungsrate
+  und aktuelle Auslastung direkt von der FRITZ!Box** (Speedtest nur als Fallback)
 - **Proxmox-Panel**: beide PVE-Nodes mit CPU/RAM/Disk-Auslastung und allen
   VMs/Containern inkl. RAM-Nutzung und Uptime je Gast - Start/Stop direkt aus dem Dashboard;
   `Enter` auf dem Node-Kopf fährt den **gesamten Server** kontrolliert herunter oder startet ihn neu
@@ -45,12 +46,13 @@ Nur **Python 3 stdlib + `fping`** — kein pip, kein venv, kein Framework.
 | `proxmox.py`       | Fragt PVE-API ab (Nodes, VMs, CTs) → `proxmox.json`         |
 | `unifi.py`         | Fragt UniFi-Controller ab (APs, WLAN-Clients) → `unifi.json` |
 | `deconz.py`        | Fragt deCONZ/Phoscon ab (Lights, Sensoren) → `deconz.json`  |
-| `speedtest.py`     | Minimaler Down/Up-Speedtest → `speed.json`                  |
-| `checker_loop.sh`  | Hintergrund-Loop: Ping/Proxmox/UniFi/deCONZ/Speedtest nach `config.json` |
+| `fritzbox.py`      | Liest WAN-/Leitungsdaten per TR-064 von der FRITZ!Box → `fritzbox.json` |
+| `speedtest.py`     | Minimaler Down/Up-Speedtest (Fallback) → `speed.json`       |
+| `checker_loop.sh`  | Hintergrund-Loop: Ping/Proxmox/UniFi/deCONZ/FRITZ!Box/Speedtest nach `config.json` |
 | `boot_notify.py`   | Meldet nach dem Boot per ntfy, sobald Dashboard + Internet laufen |
 | `notify.py`        | ntfy-Versand (Topic aus `config.json`)                      |
 | `bin/dashboard`    | Shell-Befehl `dashboard` zum Starten der TUI                |
-| `config.json`      | Geräteliste + Proxmox-/UniFi-/deCONZ-Zugangsdaten + Intervalle (**nicht im Repo**) |
+| `config.json`      | Geräteliste + Proxmox-/UniFi-/deCONZ-/FRITZ!Box-Zugangsdaten + Intervalle (**nicht im Repo**) |
 
 ## Steuerung
 
@@ -59,11 +61,12 @@ Nur **Python 3 stdlib + `fping`** — kein pip, kein venv, kein Framework.
 | `Tab`                | Panel wechseln (**Geraete** → **Proxmox** → **UniFi** → **deCONZ**) |
 | `↑`/`↓`/`←`/`→`, `j`/`k`/`h`/`l` | **Frei räumlich** zum nächsten Element in der Richtung (Geräte-Subspalten, Proxmox-Nodes/Guests, APs, deCONZ) |
 | `Enter`              | **Lightbox-Modal oeffnen** (Aktionen & Details)       |
-| Mausklick            | Auf eine AP-Zeile: **Geraete dieses APs**; auf den deCONZ-Block: **Typ-/Akku-Übersicht**; auf Node/Gast: **Server-/Gast-Modal** |
+| Mausklick            | Auf eine AP-Zeile: **Geraete dieses APs**; auf den deCONZ-Block: **Typ-/Akku-Übersicht**; auf Node/Gast: **Server-/Gast-Modal**; auf die Statuszeile: **FRITZ!Box-Modal** |
 | `a`                  | **Geraet anlegen** (Name, IP/Host, optional HTTP-Port, Gruppe) |
 | `Space`              | **Geraet pausieren / wieder aktivieren** (kein Ping, zaehlt nicht mit) |
 | `d`                  | **Geraet loeschen** (mit Rueckfrage)                  |
 | `c`                  | **Intervalle + Meldungen einstellen** (Ping, Speedtest, Offline/Online ab) |
+| `f`                  | **FRITZ!Box-Modal** (Leitung, aktuelle Auslastung, Peak, Traffic) |
 | `n`                  | Im Geräte-Modal: **ntfy-Meldung** umschalten (aus → down → up → beides) |
 | `1`..`5`             | Im Proxmox-Guest-Modal: Start / Shutdown / Reboot / Reset / Backup |
 | `s` / `r`            | Im Proxmox-Server-Modal: **ganzen Node herunterfahren / neu starten** (mit `j` bestaetigen) |
@@ -102,6 +105,12 @@ Nur **Python 3 stdlib + `fping`** — kein pip, kein venv, kein Framework.
   Kanalauslastung und alle WLAN-Geraete des Access Points in mehreren Spalten.
   - `[q]` / `[ESC]` Schliessen
 
+- **FRITZ!Box Modal (`f` oder Klick auf die Statuszeile)**:
+  Zeigt Modell, Firmware, Link-Status, Uptime, die vom Anbieter bereitgestellte
+  Leitungsrate, die aktuelle Auslastung mit Balken, Peak der letzten Messwerte,
+  Traffic seit Neustart und die Sync-Gruppe (z. B. `sync_cable`).
+  - `[q]` / `[ESC]` Schliessen
+
 ## Geraeteverwaltung (direkt im Dashboard)
 
 - `a` oeffnet ein Formular (Name, IP/Host, HTTP-Port optional, Gruppe per `<` / `>`).
@@ -121,7 +130,8 @@ In `config.json` (oder bequem per `c` im Dashboard):
 | Feld | Standard | Bedeutung |
 |---|---|---|
 | `poll_interval` | 15 | Sekunden zwischen Ping-Runden (`fping`, 1 Paket/Host) |
-| `speedtest_interval_min` | 30 | Minuten zwischen Speedtests (~500 KB pro Lauf) |
+| `speedtest_interval_min` | 30 | Minuten zwischen Speedtests (~500 KB pro Lauf); entfällt, solange die FRITZ!Box Leitungsdaten liefert |
+| `fritzbox_interval_sec` | 60 | Sekunden zwischen TR-064-Abfragen der FRITZ!Box |
 | `fping_timeout` | 800 | ms pro Host |
 | `offline_after` | 3 | Fehlversuche in Folge, bis „Internet offline“ gilt |
 | `online_after` | 2 | Erfolge in Folge, bis „wieder online“ gilt |
@@ -233,6 +243,53 @@ Hardware-/OS-Info, die Uptime bleibt stehen.
 
 Im Proxmox-Panel steht hinter jedem laufenden CT/VM ebenfalls die Uptime
 (`up 86d5h`), im Detail-Modal zusätzlich ausgeschrieben.
+
+## FRITZ!Box-Block (WAN/Leitung)
+
+Statt eines eigenen Speedtests liest `fritzbox.py` die Daten direkt per
+**TR-064** (SOAP über HTTP, Digest-Auth) von der FRITZ!Box. In der Statuszeile
+steht damit die vom Anbieter bereitgestellte Leitungsrate plus die aktuelle
+Auslastung:
+
+```
+● INTERNET ONLINE 22h48 · WLAN WITZ!Box2 192.168.178.67   36/40 Geraete
+  WAN ↓50.5 / ↑3.8 Mbps jetzt 0.03/0.07   next ░░░░░
+```
+
+- `↓/↑` = `Newmax_ds`/`Newmax_us` aus `X_AVM-DE_GetOnlineMonitor` (die
+  tatsächlich provisionierte Kabel-/DSL-Rate, nicht die physikalische Layer-1-Rate)
+- `jetzt` = neuester Wert aus `Newds_current_bps`/`Newus_current_bps`
+  (20 kommagetrennte Messwerte, Index 0 ist der neueste)
+- bei schmalem Terminal entfallen zuerst `jetzt …`, dann die Nachkommastellen
+- **`f`** oder Klick auf die Statuszeile öffnet das FRITZ!Box-Modal mit Modell,
+  Firmware, Uptime, Leitungsrate, aktueller Auslastung (Balken relativ zur
+  Leitungsrate), Peak der letzten 20 Werte, Traffic seit Neustart und Sync-Gruppe
+- Liefert die Box keine Daten (`ok=false`), bleibt die letzte Anzeige erhalten
+  und der eigene Speedtest übernimmt wieder (`speed.json`)
+
+Zugang in `config.json` (Modus 600, **nicht ins Repo**):
+
+```json
+"fritzbox_interval_sec": 60,
+"fritzbox": {
+  "enabled": true,
+  "host": "192.168.178.1",
+  "port": 49000,
+  "user": "fritz3219",
+  "password": "…",
+  "timeout": 8
+}
+```
+
+Abgefragt werden `DeviceInfo:GetInfo`, `WANCommonInterfaceConfig:
+GetCommonLinkProperties`, `X_AVM-DE_GetOnlineMonitor` (SyncGroup 0),
+`GetTotalBytesReceived` und `GetTotalBytesSent`. Die FRITZ!Box muss TR-064 im
+Web-UI zulassen (*Heimnetz → Netzwerk → Netzwerkeinstellungen → Zugriff für
+Anwendungen*). Ein eingebauter Speedtest ist über TR-064 nicht verfügbar
+(`X_AVM-DE_Speedtest` liefert auf der 6590 Cable nur eine leere Statistik).
+
+`checker_loop.sh` startet den Poller alle `fritzbox_interval_sec`; der eigene
+`speedtest.py` läuft nur noch, wenn `fritzbox.json` fehlt oder `ok != true` ist.
 
 ## UniFi-Block
 
@@ -400,7 +457,7 @@ sudo mkdir -p /opt/netbook-dashboard
 sudo cp *.py *.sh /opt/netbook-dashboard/
 sudo install -m 755 bin/dashboard /usr/local/bin/dashboard
 cp config.example.json /opt/netbook-dashboard/config.json
-# config.json anpassen: Geräte + Proxmox-Tokens + UniFi-/deCONZ-Zugang eintragen
+# config.json anpassen: Geräte + Proxmox-Tokens + UniFi-/deCONZ-/FRITZ!Box-Zugang eintragen
 ```
 
 ### Proxmox-Token erzeugen
