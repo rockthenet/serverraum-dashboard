@@ -7,8 +7,9 @@ remote per SSH erreichbar.
 Zeigt in einem mehrspaltigen ASCII-Layout:
 
 - **Erreichbarkeit** aller Netzwerk-Geräte (Ping + optionaler HTTP-Check), gruppiert
-- **Internet-Status** inkl. Verbindungsart (LAN/WLAN, IP, SSID) + **WAN-Leitungsrate
-  und aktuelle Auslastung direkt von der FRITZ!Box** (Speedtest nur als Fallback)
+- **Internet-Status** inkl. Verbindungsart (LAN/WLAN, IP, SSID) + **maximale
+  WAN-Rate (`WAN max`) und aktuelle Auslastung direkt von der FRITZ!Box**
+  (Speedtest nur als Fallback)
 - **Proxmox-Panel**: beide PVE-Nodes mit CPU/RAM/Disk-Auslastung und allen
   VMs/Containern inkl. RAM-Nutzung und Uptime je Gast - Start/Stop direkt aus dem Dashboard;
   `Enter` auf dem Node-Kopf fährt den **gesamten Server** kontrolliert herunter oder startet ihn neu
@@ -23,7 +24,7 @@ Zeigt in einem mehrspaltigen ASCII-Layout:
 - **Verwaltung im TUI**: Geräte anlegen / pausieren / löschen, Intervalle
   für Ping und Speedtest einstellen, Statusdauer je Gerät
 - **ntfy-Meldungen pro Gerät**: auf Wunsch bei DOWN, UP oder beidem
-- **Uptime** des Dashboards-Rechners in der Titelzeile
+- **Uptime**, **CPU-** und **RAM-Auslastung** des Dashboards-Rechners in der Titelzeile
 
 Nur **Python 3 stdlib + `fping`** — kein pip, kein venv, kein Framework.
 
@@ -48,7 +49,8 @@ Nur **Python 3 stdlib + `fping`** — kein pip, kein venv, kein Framework.
 | `deconz.py`        | Fragt deCONZ/Phoscon ab (Lights, Sensoren) → `deconz.json`  |
 | `fritzbox.py`      | Liest WAN-/Leitungsdaten per TR-064 von der FRITZ!Box → `fritzbox.json` |
 | `speedtest.py`     | Minimaler Down/Up-Speedtest (Fallback) → `speed.json`       |
-| `checker_loop.sh`  | Hintergrund-Loop: Ping/Proxmox/UniFi/deCONZ/FRITZ!Box/Speedtest nach `config.json` |
+| `scheduler.py`     | Sequenzieller Poller: startet Ping/Proxmox/UniFi/deCONZ/FRITZ!Box/Speedtest nacheinander |
+| `checker_loop.sh`  | Dünne Hülle für den systemd-Dienst `netbook-checker` → `scheduler.py` |
 | `boot_notify.py`   | Meldet nach dem Boot per ntfy, sobald Dashboard + Internet laufen |
 | `notify.py`        | ntfy-Versand (Topic aus `config.json`)                      |
 | `bin/dashboard`    | Shell-Befehl `dashboard` zum Starten der TUI                |
@@ -132,12 +134,37 @@ In `config.json` (oder bequem per `c` im Dashboard):
 | `poll_interval` | 15 | Sekunden zwischen Ping-Runden (`fping`, 1 Paket/Host) |
 | `speedtest_interval_min` | 30 | Minuten zwischen Speedtests (~500 KB pro Lauf); entfällt, solange die FRITZ!Box Leitungsdaten liefert |
 | `fritzbox_interval_sec` | 60 | Sekunden zwischen TR-064-Abfragen der FRITZ!Box |
+| `proxmox_interval_sec` | 30 | Sekunden zwischen PVE-Abfragen (Nodes, VMs, CTs) |
+| `unifi_interval_sec` | 60 | Sekunden zwischen UniFi-Abfragen (APs, WLAN-Clients) |
+| `deconz_interval_sec` | 60 | Sekunden zwischen deCONZ-Abfragen (Lights, Sensoren) |
 | `fping_timeout` | 800 | ms pro Host |
 | `offline_after` | 3 | Fehlversuche in Folge, bis „Internet offline“ gilt |
 | `online_after` | 2 | Erfolge in Folge, bis „wieder online“ gilt |
 
-`checker_loop.sh` liest die Werte vor jedem Durchlauf - Aenderungen greifen
-sofort, ohne Dienst-Neustart. Proxmox wird weiterhin alle 30 s abgefragt.
+`checker_loop.sh` ist nur noch eine Hülle um **`scheduler.py`**. Der Scheduler
+liest die Werte vor jedem Job neu — Änderungen greifen sofort, ohne
+Dienst-Neustart.
+
+### Sequenzieller Scheduler (Performance)
+
+Früher liefen alle Abfragen gleichzeitig; bei mehreren geöffneten Dashboards
+kam die Zero 2 W schnell an ihre Grenzen. `scheduler.py` arbeitet deshalb so:
+
+- **immer nur ein Kindprozess** — keine parallelen HTTP-/SSH-Abfragen
+- **feste Reihenfolge/Priorität**: `checker` → `proxmox` → `fritzbox` →
+  `unifi` → `deconz` → `speedtest`
+- **Phasenversatz** je Job (0/4/12/28/44 s), damit die Abfragen nicht bündeln
+- **Timeout** pro Job (30–90 s); ein hängender Job blockiert die anderen nicht
+- **Backoff** bei Fehlern: 2×, 4×, maximal 4× Intervall
+- **`nice`** für Scheduler und Kinder, dazu ein **Lastschutz**: ist der
+  Load-Schnitt über `max(1.5, Kerne/2)`, warten unkritische Jobs 3 s
+- **Speedtest-Guard**: liefert `fritzbox.json` gültige Leitungsdaten
+  (`ok=true`, `down_bps>0`), wird der eigene Speedtest übersprungen
+- **flock** auf `scheduler.lock` — es läuft nie mehr als ein Scheduler
+
+Das Dashboard selbst zeichnet nur noch **einmal pro Sekunde** neu und liest die
+JSON-Dateien über einen **mtime/Größen-Cache**; unveränderte Dateien werden
+nicht erneut geparst.
 
 ## Internet-Meldungen (entprellt)
 
@@ -232,17 +259,40 @@ weg ist, werden Geräte-Meldungen unterdrückt, und Geräte, die während eines
 Internet-Ausfalls down gingen, lösen danach keine Einzel-Flut aus (max. 5
 Meldungen pro Durchlauf, Rest als Sammelmeldung).
 
-## Uptime in der Titelzeile
+## Uptime, CPU und RAM in der Titelzeile
 
 ```
- SERVERRAUM DASHBOARD  ⠋  zero2 / Zero 2 W / Debian 13  up 3d4h        18:49:42
+ SERVERRAUM DASHBOARD  ⠋  zero2 / Zero 2 W / Debian 13  CPU 12  RAM 55  up 3d4h   18:49:42
 ```
 
-Gelesen wird `/proc/uptime`; bei schmalem Terminal entfällt zuerst die
-Hardware-/OS-Info, die Uptime bleibt stehen.
+- **CPU** kommt aus `/proc/stat` (Differenz seit dem letzten Redraw, also die
+  Auslastung des Dashboard-Rechners, nicht der überwachten Server)
+- **RAM** aus `/proc/meminfo` (`MemTotal` − `MemAvailable`)
+- Farbe: grün < 70 %, gelb < 85 %, orange < 95 %, sonst rot
+- bei schmalem Terminal wird zuerst die Hardware-/OS-Info gekürzt, dann
+  `CPU`/`RAM` zu `C`/`R`; die Uptime bleibt stehen
 
-Im Proxmox-Panel steht hinter jedem laufenden CT/VM ebenfalls die Uptime
-(`up 86d5h`), im Detail-Modal zusätzlich ausgeschrieben.
+Gelesen wird `/proc/uptime`; im Proxmox-Panel steht hinter jedem laufenden
+CT/VM ebenfalls die Uptime (`up 86d5h`), im Detail-Modal zusätzlich
+ausgeschrieben.
+
+## Zwei Instanzen: Kiosk + eine Shell
+
+Es dürfen **zwei** Dashboards gleichzeitig laufen: der Kiosk auf dem
+physischen Bildschirm (`/dev/tty1`) und **eine** Sitzung über SSH.
+
+- eine **neue Shell-Sitzung** beendet die vorherige Shell-Sitzung
+  (`SIGTERM`, sauberes Aufräumen des Terminals); der Kiosk läuft weiter
+- der **Kiosk** wird von einer Shell-Sitzung nie beendet
+- ein **Kiosk-Neustart** ersetzt nur einen alten Kiosk-Prozess, nie die
+  externe Sitzung
+- registriert wird das in `dashboard.lock` als `PID TTY ROLLE` (`k` = Kiosk,
+  `e` = extern); abgestürzte Einträge werden per `kill(pid, 0)` aussortiert
+- lässt sich eine alte externe Instanz nicht beenden, startet die neue nicht
+  (Meldung mit PID)
+
+Damit bleibt der Bildschirm im Serverraum immer aktuell, ohne dass sich
+mehrere Shell-Sitzungen gegenseitig die CPU wegnehmen.
 
 ## FRITZ!Box-Block (WAN/Leitung)
 
@@ -253,17 +303,20 @@ Auslastung:
 
 ```
 ● INTERNET ONLINE 22h48 · WLAN WITZ!Box2 192.168.178.67   36/40 Geraete
-  WAN ↓50.5 / ↑3.8 Mbps jetzt 0.03/0.07   next ░░░░░
+  WAN max ↓50.5 / ↑3.8 Mbps jetzt 0.03/0.07   next ░░░░░
 ```
 
-- `↓/↑` = `Newmax_ds`/`Newmax_us` aus `X_AVM-DE_GetOnlineMonitor` (die
-  tatsächlich provisionierte Kabel-/DSL-Rate, nicht die physikalische Layer-1-Rate)
+- `WAN max ↓/↑` = `Newmax_ds`/`Newmax_us` aus `X_AVM-DE_GetOnlineMonitor` (die
+  tatsächlich provisionierte Kabel-/DSL-Rate des Tarifs, **nicht** die
+  physikalische Layer-1-Rate)
 - `jetzt` = neuester Wert aus `Newds_current_bps`/`Newus_current_bps`
   (20 kommagetrennte Messwerte, Index 0 ist der neueste)
-- bei schmalem Terminal entfallen zuerst `jetzt …`, dann die Nachkommastellen
+- bei schmalem Terminal entfallen zuerst `jetzt …`, dann die Nachkommastellen,
+  dann das Wort `max`
 - **`f`** oder Klick auf die Statuszeile öffnet das FRITZ!Box-Modal mit Modell,
-  Firmware, Uptime, Leitungsrate, aktueller Auslastung (Balken relativ zur
-  Leitungsrate), Peak der letzten 20 Werte, Traffic seit Neustart und Sync-Gruppe
+  Firmware, Uptime, **maximaler Anbieter-Rate**, DOCSIS-/Layer-1-Kapazität,
+  aktueller Auslastung (Balken + Prozent relativ zur Maximalrate), Peak der
+  letzten 20 Werte, Traffic seit Neustart und Sync-Gruppe
 - Liefert die Box keine Daten (`ok=false`), bleibt die letzte Anzeige erhalten
   und der eigene Speedtest übernimmt wieder (`speed.json`)
 
@@ -288,7 +341,7 @@ Web-UI zulassen (*Heimnetz → Netzwerk → Netzwerkeinstellungen → Zugriff f�
 Anwendungen*). Ein eingebauter Speedtest ist über TR-064 nicht verfügbar
 (`X_AVM-DE_Speedtest` liefert auf der 6590 Cable nur eine leere Statistik).
 
-`checker_loop.sh` startet den Poller alle `fritzbox_interval_sec`; der eigene
+`scheduler.py` startet den Poller alle `fritzbox_interval_sec`; der eigene
 `speedtest.py` läuft nur noch, wenn `fritzbox.json` fehlt oder `ok != true` ist.
 
 ## UniFi-Block

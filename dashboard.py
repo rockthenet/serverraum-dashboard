@@ -20,6 +20,7 @@ import json
 import os
 import re
 import select
+import signal
 import ssl
 import subprocess
 import sys
@@ -77,6 +78,55 @@ def host_uptime():
     except Exception:
         return 0.0
 
+
+_CPU_LAST = {"total": 0, "idle": 0}
+_CPU_PCT = None
+
+
+def host_cpu_percent():
+    """CPU-Auslastung des Dashboard-Rechners seit dem letzten Aufruf."""
+    global _CPU_PCT
+    try:
+        with open("/proc/stat") as f:
+            parts = f.readline().split()
+        vals = [int(x) for x in parts[1:]]
+        idle = vals[3] + (vals[4] if len(vals) > 4 else 0)
+        total = sum(vals)
+        prev = dict(_CPU_LAST)
+        _CPU_LAST["total"] = total
+        _CPU_LAST["idle"] = idle
+        dt = total - prev["total"]
+        if dt < 20:
+            return _CPU_PCT
+        di = idle - prev["idle"]
+        pct = int(round(100.0 * (dt - di) / dt))
+        _CPU_PCT = max(0, min(100, pct))
+        return _CPU_PCT
+    except Exception:
+        return None
+
+
+def host_ram_percent():
+    """RAM-Auslastung des Dashboard-Rechners (MemAvailable, sonst Schaetzung)."""
+    try:
+        info = {}
+        with open("/proc/meminfo") as f:
+            for line in f:
+                if ":" not in line:
+                    continue
+                key, value = line.split(":", 1)
+                info[key] = int(value.split()[0])
+        total = info.get("MemTotal") or 0
+        if not total:
+            return None
+        avail = info.get("MemAvailable")
+        if avail is None:
+            avail = (info.get("MemFree", 0) + info.get("Buffers", 0)
+                     + info.get("Cached", 0))
+        return max(0, min(100, int(round(100.0 * (total - avail) / total))))
+    except Exception:
+        return None
+
 HERE = os.path.dirname(os.path.abspath(__file__))
 STATE = os.path.join(HERE, "state.json")
 PROX = os.path.join(HERE, "proxmox.json")
@@ -85,6 +135,7 @@ FRITZ = os.path.join(HERE, "fritzbox.json")
 UNI = os.path.join(HERE, "unifi.json")
 DECONZ = os.path.join(HERE, "deconz.json")
 CONFIG = os.path.join(HERE, "config.json")
+LOCK_FILE = os.path.join(HERE, "dashboard.lock")
 
 # ─── ANSI ───
 ESC = "\033"
@@ -124,6 +175,174 @@ MBOX = {
     "tl": "\u2554", "tr": "\u2557", "bl": "\u255a", "br": "\u255d",
     "lt": "\u2560", "rt": "\u2563",
 }
+
+
+def _pct_fg(value):
+    """Farbe fuer CPU/RAM-Prozentwerte (ohne Hintergrund/Reset)."""
+    if value is None:
+        return CLR["dark"]
+    if value < 70:
+        return CLR["green"]
+    if value < 85:
+        return CLR["yellow"]
+    if value < 95:
+        return CLR["orange"]
+    return CLR["red"]
+
+
+def _is_kiosk():
+    """Laeuft diese Instanz auf dem physischen Bildschirm (tty1)?"""
+    try:
+        return os.ttyname(0) == "/dev/tty1"
+    except Exception:
+        return False
+
+
+def _pid_alive(pid):
+    if pid <= 0:
+        return False
+    try:
+        os.kill(pid, 0)
+        return True
+    except ProcessLookupError:
+        return False
+    except PermissionError:
+        return True
+    except Exception:
+        return False
+
+
+def _read_registry(fd):
+    """Eintraege (pid, tty, rolle) aus der Sperrdatei lesen (flock gehalten)."""
+    entries = []
+    try:
+        os.lseek(fd, 0, os.SEEK_SET)
+        raw = os.read(fd, 4096).decode("utf-8", "replace")
+    except Exception:
+        return entries
+    for line in raw.splitlines():
+        parts = line.split()
+        if not parts:
+            continue
+        try:
+            pid = int(parts[0])
+        except ValueError:
+            continue
+        tty = parts[1] if len(parts) > 1 else ""
+        role = parts[2] if len(parts) > 2 else ("k" if tty == "/dev/tty1" else "e")
+        entries.append((pid, tty, role))
+    return entries
+
+
+def _write_registry(fd, entries):
+    try:
+        os.ftruncate(fd, 0)
+        os.lseek(fd, 0, os.SEEK_SET)
+        text = "".join("{} {} {}\n".format(pid, tty or "-", role)
+                       for pid, tty, role in entries)
+        os.write(fd, text.encode("utf-8"))
+    except Exception:
+        pass
+
+
+def _acquire_instance_lock():
+    """Bis zu zwei Dashboards: der Kiosk auf tty1 und eine externe Sitzung.
+
+    Startet eine neue Instanz, beendet sie die jeweils aeltere Instanz ihrer
+    Art: eine neue Shell-Sitzung verdraengt die vorherige Shell-Sitzung, der
+    Kiosk auf dem Host laeuft weiter. Ein Kiosk-Start verdraengt nur einen
+    alten Kiosk-Prozess, nie die externe Sitzung.
+
+    Rueckgabe (fd, info): fd=None -> Start abgelehnt (alte Instanz reagiert
+    nicht), fd=-1 -> Sperrdatei nicht verfuegbar (Dashboard laeuft trotzdem).
+    """
+    kiosk = _is_kiosk()
+    role = "k" if kiosk else "e"
+    tty = ""
+    try:
+        tty = os.ttyname(0)
+    except Exception:
+        pass
+    try:
+        fd = os.open(LOCK_FILE, os.O_CREAT | os.O_RDWR, 0o644)
+    except Exception:
+        return -1, ""
+    got_lock = False
+    for _ in range(30):
+        try:
+            fcntl.flock(fd, fcntl.LOCK_EX | fcntl.LOCK_NB)
+            got_lock = True
+            break
+        except OSError:
+            time.sleep(0.1)
+    if not got_lock:
+        # Alte Instanz haelt die Sperre noch -> Dashboard trotzdem starten.
+        try:
+            os.close(fd)
+        except Exception:
+            pass
+        return -1, ""
+    try:
+        entries = [(p, t, r) for p, t, r in _read_registry(fd)
+                   if p != os.getpid() and _pid_alive(p)]
+        keep = []
+        kill = []
+        for pid, etty, erole in entries:
+            if role == erole:
+                # gleiche Art: die neue Instanz verdraengt die alte
+                kill.append(pid)
+            else:
+                keep.append((pid, etty, erole))
+        for pid in kill:
+            try:
+                os.kill(pid, signal.SIGTERM)
+            except Exception:
+                pass
+        deadline = time.time() + 5.0
+        remaining = list(kill)
+        while remaining and time.time() < deadline:
+            time.sleep(0.1)
+            remaining = [p for p in remaining if _pid_alive(p)]
+        if remaining and not kiosk:
+            # Alte externe Instanz liess sich nicht beenden -> nicht starten.
+            fcntl.flock(fd, fcntl.LOCK_UN)
+            os.close(fd)
+            return None, " ".join(str(p) for p in remaining)
+        _write_registry(fd, keep + [(os.getpid(), tty, role)])
+        fcntl.flock(fd, fcntl.LOCK_UN)
+        return fd, ""
+    except Exception:
+        try:
+            fcntl.flock(fd, fcntl.LOCK_UN)
+            os.close(fd)
+        except Exception:
+            pass
+        return -1, ""
+
+
+def _release_instance_lock(fd):
+    """Eigenen Eintrag entfernen, ohne andere Instanzen zu verlieren."""
+    if not isinstance(fd, int) or fd < 0:
+        return
+    got = False
+    for _ in range(10):
+        try:
+            fcntl.flock(fd, fcntl.LOCK_EX | fcntl.LOCK_NB)
+            got = True
+            break
+        except OSError:
+            time.sleep(0.1)
+    if got:
+        try:
+            entries = [(p, t, r) for p, t, r in _read_registry(fd)
+                       if p != os.getpid()]
+            _write_registry(fd, entries)
+        except Exception:
+            pass
+    try:
+        os.close(fd)
+    except Exception:
+        pass
 
 SPARK = "\u2581\u2582\u2583\u2584\u2585\u2586\u2587\u2588"
 SPIN = ["\u280b", "\u2819", "\u2838", "\u2834", "\u2826", "\u2807"]
@@ -263,10 +482,21 @@ def save_config(cfg):
         pass
 
 
+_LOAD_CACHE = {}
+
+
 def load(path):
+    """JSON laden, aber nur neu parsen, wenn sich mtime/Groesse geaendert haben."""
     try:
+        st = os.stat(path)
+        key = (st.st_mtime_ns, st.st_size)
+        cached = _LOAD_CACHE.get(path)
+        if cached and cached[0] == key:
+            return cached[1]
         with open(path) as f:
-            return json.load(f)
+            data = json.load(f)
+        _LOAD_CACHE[path] = (key, data)
+        return data
     except Exception:
         return None
 
@@ -529,14 +759,20 @@ def build_fritz_modal(modal, mw):
     lines.append(mline("Uptime:   {}".format(human_uptime(fb.get("uptime", 0)))))
 
     lines.append(msep())
-    lines.append(mline(CLR["cyan"] + BOLD + "LEITUNG (Anbieter)" + RST))
+    lines.append(mline(CLR["cyan"] + BOLD + "MAXIMAL (Anbieter)" + RST))
     lines.append(mline("  {}\u2193 {} Mbps{}   {}\u2191 {} Mbps{}".format(
         CLR["cyan"], rate(fb.get("down_bps")), RST,
         CLR["cyan"], rate(fb.get("up_bps")), RST)))
+    layer1_d = fb.get("layer1_down_bps") or 0
+    layer1_u = fb.get("layer1_up_bps") or 0
+    if layer1_d or layer1_u:
+        lines.append(mline(CLR["dark"] + "  DOCSIS/Layer 1: \u2193 {} / \u2191 {} Mbps".format(
+            rate(layer1_d), rate(layer1_u)) + RST))
 
     down_f = (fb.get("down_cur_bps") or 0) / max(fb.get("down_bps") or 1, 1)
     up_f = (fb.get("up_cur_bps") or 0) / max(fb.get("up_bps") or 1, 1)
-    lines.append(mline(CLR["cyan"] + BOLD + "AKTUELL" + RST))
+    lines.append(mline("{}{}AKTUELL  {:.1f}% / {:.1f}%{}".format(
+        CLR["cyan"], BOLD, down_f * 100, up_f * 100, RST)))
     lines.append(mline("  \u2193 {} {:>6} Mbps".format(
         bar(down_f, 8, CLR["green"] if down_f < 0.8 else CLR["orange"]),
         rate(fb.get("down_cur_bps"), 2))))
@@ -544,7 +780,7 @@ def build_fritz_modal(modal, mw):
         bar(up_f, 8, CLR["green"] if up_f < 0.8 else CLR["orange"]),
         rate(fb.get("up_cur_bps"), 2))))
 
-    lines.append(mline("Spitze:   \u2193 {}   \u2191 {} Mbps".format(
+    lines.append(mline("Peak:     \u2193 {}   \u2191 {} Mbps".format(
         rate(fb.get("down_peak_bps")), rate(fb.get("up_peak_bps")))))
     rx = fb.get("bytes_received") or 0
     tx = fb.get("bytes_sent") or 0
@@ -885,9 +1121,22 @@ def render(w, h, state, prox, speed, uni, dc, frame, active_panel,
     up = human_age(host_uptime())
     host = HOSTINFO.split(" / ")[0]
     clock = time.strftime("%H:%M:%S ")
+    cpu = host_cpu_percent()
+    ram = host_ram_percent()
+    cpu_s = str(cpu) if cpu is not None else "-"
+    ram_s = str(ram) if ram is not None else "-"
+    load_full = "{}CPU {}  {}RAM {}{}".format(
+        _pct_fg(cpu), cpu_s, _pct_fg(ram), ram_s, CLR["titlebg"])
+    load_short = "{}C{}  {}R{}{}".format(
+        _pct_fg(cpu), cpu_s, _pct_fg(ram), ram_s, CLR["titlebg"])
     title_variants = [
-        " SERVERRAUM DASHBOARD  {}  {}  up {} ".format(spin, HOSTINFO, up),
-        " SERVERRAUM DASHBOARD  {}  {}  up {} ".format(spin, host, up),
+        " SERVERRAUM DASHBOARD  {}  {}  {}  up {} ".format(
+            spin, HOSTINFO, load_full, up),
+        " SERVERRAUM DASHBOARD  {}  {}  {}  up {} ".format(
+            spin, host, load_full, up),
+        " SERVERRAUM DASHBOARD  {}  {}  up {} ".format(
+            spin, load_short, up),
+        " SERVERRAUM DASHBOARD  {}  up {} ".format(load_short, up),
         " SERVERRAUM DASHBOARD  up {} ".format(up),
     ]
     left = title_variants[-1]
@@ -934,12 +1183,15 @@ def render(w, h, state, prox, speed, uni, dc, frame, active_panel,
         cdm = (fb.get("down_cur_bps") or 0) / 1e6
         cum = (fb.get("up_cur_bps") or 0) / 1e6
         sp_variants.append(
-            "{}WAN \u2193{:.1f}{} / {}\u2191{:.1f}{} Mbps {}jetzt {:.2f}/{:.2f}{}".format(
+            "{}WAN max \u2193{:.1f}{} / {}\u2191{:.1f}{} Mbps {}jetzt {:.2f}/{:.2f}{}".format(
                 CLR["cyan"], dm, RST, CLR["cyan"], um, RST,
                 CLR["dark"], cdm, cum, RST))
         sp_variants.append(
-            "{}WAN \u2193{:.1f}{} / {}\u2191{:.1f}{} Mbps".format(
+            "{}WAN max \u2193{:.1f}{} / {}\u2191{:.1f}{} Mbps".format(
                 CLR["cyan"], dm, RST, CLR["cyan"], um, RST))
+        sp_variants.append(
+            "{}WAN \u2193{:.1f}/\u2191{:.1f} Mbps{}".format(
+                CLR["cyan"], dm, um, RST))
         sp_variants.append(
             "{}WAN {:.0f}/{:.0f} Mbps{}".format(CLR["cyan"], dm, um, RST))
     elif speed and speed.get("ok"):
@@ -2325,6 +2577,14 @@ CFG = {}
 
 def main():
     global CFG
+    lock_fd, other = _acquire_instance_lock()
+    if lock_fd is None:
+        msg = "Start abgelehnt: bestehende Instanz reagiert nicht"
+        if other:
+            msg += " (PID {})".format(other)
+        sys.stdout.write(msg + ". Bitte dort mit q beenden.\n")
+        sys.stdout.flush()
+        return
     os.environ.setdefault("TERM", "linux")
     CFG = load(CONFIG) or {"groups": {}}
 
@@ -2354,6 +2614,15 @@ def main():
 
     mouse_on = ESC + "[?1000h" + ESC + "[?1006h"
     mouse_off = ESC + "[?1006l" + ESC + "[?1000l"
+
+    def _term(signum, frame):
+        raise SystemExit(0)
+
+    try:
+        signal.signal(signal.SIGTERM, _term)
+    except Exception:
+        pass
+
     sys.stdout.write(ESC + "[?25l" + mouse_on)
     try:
         if is_tty:
@@ -2430,7 +2699,7 @@ def main():
             frame += 1
 
             # Warten auf Input (0.35s Timeout fuer Animation)
-            r, _, _ = select.select([fd], [], [], 0.35)
+            r, _, _ = select.select([fd], [], [], 1.0)
             if not r:
                 continue
 
@@ -2693,6 +2962,7 @@ def main():
         sys.stdout.write(ESC + "[2J" + ESC + "[H")
         sys.stdout.flush()
         print("Dashboard beendet. Neustart mit: dash")
+        _release_instance_lock(lock_fd)
 
 
 if __name__ == "__main__":

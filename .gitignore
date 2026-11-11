@@ -2,8 +2,12 @@
 state.json
 proxmox.json
 unifi.json
+deconz.json
+fritzbox.json
 speed.json
 history.json
+dashboard.lock
+scheduler.lock
 
 # Echte Config mit API-Tokens NIEMALS committen
 config.json

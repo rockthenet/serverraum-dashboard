@@ -4,6 +4,7 @@
   "http_timeout": 3,
   "speedtest_interval_min": 30,
   "fritzbox_interval_sec": 60,
+  "proxmox_interval_sec": 30,
   "offline_after": 3,
   "online_after": 2,
   "groups": {
