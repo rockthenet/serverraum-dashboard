@@ -1953,7 +1953,7 @@ def build_homematic_modal(modal, mw, max_rows=None):
         int(hm.get("rssi_bad_limit") or -95),
         int(hm.get("rssi_weak_limit") or -85))))
 
-    # Abschnitte in Prioritaetsreihenfolge; bei Platzmangel werden Listen gekuerzt.
+    # Abschnitte in Prioritaetsreihenfolge; die Liste wird gescrollt.
     sections = [
         ("BATTERIE LEER", CLR["red"],
          [(p["name"] + volt_txt(p), "") for p in (problems.get("empty") or [])]),
@@ -1981,50 +1981,55 @@ def build_homematic_modal(modal, mw, max_rows=None):
     if text:
         type_chunks.append(text)
 
-    # Platz: Kopf/Summen stehen schon, unten kommen Trennlinie, Stand, Rahmen.
-    avail = (max_rows - len(lines) - 3) if max_rows else 999
-    # Typen-Uebersicht nur reservieren, wenn danach noch Platz fuer Listen bleibt.
-    if type_chunks and avail >= 18:
-        type_rows = 4
-    elif type_chunks and avail >= 10:
-        type_rows = 3
-    else:
-        type_rows = 0
-    budget = max(0, avail - type_rows)
-    for head, color, items in sections:
-        if not items or budget < 3:
+    for sec_head, color, items in sections:
+        if not items:
             continue
         lines.append(msep())
-        budget -= 1
         lines.append(mline(color + BOLD + "{} ({}){}".format(
-            head, len(items), RST)))
-        budget -= 1
-        room = budget
-        if len(items) <= room:
-            show = len(items)
-        else:
-            show = max(1, room - 1)      # mind. 1 Eintrag, sonst "+N weitere"
-        for name, extra in items[:show]:
+            sec_head, len(items), RST)))
+        for name, extra in items:
             text = "  " + clip(name, max(10, mw - 10 - vlen(extra))) + extra
             lines.append(mline(text))
-        budget -= show
-        if show < len(items) and budget > 0:
-            lines.append(mline(CLR["dark"] + "  \u2026 +{} weitere".format(
-                len(items) - show) + RST))
-            budget -= 1
 
-    type_room = max(budget, type_rows)
-    if type_chunks and type_room >= 3:
+    if type_chunks:
         lines.append(msep())
         lines.append(mline(CLR["cyan"] + BOLD + "NACH TYP" + RST))
-        for chunk in type_chunks[:type_room - 2]:
+        for chunk in type_chunks:
             lines.append(mline("  " + chunk))
 
     lines.append(msep())
     lines.append(mline(CLR["gray"] + "Stand {}   [ESC]/[q] schliessen".format(
         fmt_ts(hm.get("ts"))) + RST))
     lines.append(mbg + MBOX["bl"] + MBOX["h"] * (mw - 2) + MBOX["br"] + RST)
-    return lines
+
+    if not max_rows:
+        modal["scroll"] = 0
+        modal["max_scroll"] = 0
+        return lines
+
+    # Kopf + Zusammenfassung bleiben stehen, die Listen darunter scrollen.
+    head_n = 6 if (max_rows >= 12 and len(lines) >= 10) else 3
+    head = lines[:head_n]
+    foot = lines[-3:]
+    content = lines[head_n:-3]
+    body_h = max(1, max_rows - head_n - len(foot))
+    max_scroll = max(0, len(content) - body_h)
+    scroll = max(0, min(int(modal.get("scroll") or 0), max_scroll))
+    modal["scroll"] = scroll
+    modal["max_scroll"] = max_scroll
+
+    if max_scroll:
+        pos = "[{}-{}/{}]".format(scroll + 1,
+                                  min(len(content), scroll + body_h),
+                                  len(content))
+        title = "HOMEMATIC CCU: {} Geraete  {}".format(total, pos)
+        head[1] = (mhi + MBOX["v"] + " "
+                   + padto(clip(title, mw - 4), mw - 4) + " " + MBOX["v"] + RST)
+        foot[1] = mline(CLR["gray"]
+                        + "Stand {}   \u2191\u2193 bl\u00e4ttern  ESC/q".format(
+                            fmt_ts(hm.get("ts"))) + RST)
+
+    return head + content[scroll:scroll + body_h] + foot
 
 
 def open_deconz_modal(dc):
@@ -2524,6 +2529,24 @@ def handle_input(data, active_panel, sel_dev, sel_guest, sel_ap, sel_dc,
             if i + 2 < n and data[i + 1] == 0x5b:  # ESC [
                 code = data[i + 2]
                 if modal:
+                    if modal.get("type") == "homematic":
+                        cur = int(modal.get("scroll") or 0)
+                        mx = int(modal.get("max_scroll") or 0)
+                        if code == 0x41:        # Up
+                            cur -= 1
+                        elif code == 0x42:      # Down
+                            cur += 1
+                        elif code == 0x48:      # Home
+                            cur = 0
+                        elif code == 0x46:      # End
+                            cur = mx
+                        elif (code in (0x35, 0x36) and i + 3 < n
+                              and data[i + 3] == 0x7e):   # PgUp/PgDn
+                            cur += -10 if code == 0x35 else 10
+                            modal["scroll"] = max(0, min(mx, cur))
+                            i += 4
+                            continue
+                        modal["scroll"] = max(0, min(mx, cur))
                     i += 3
                     continue
                 if code == 0x41:  # Up
@@ -2595,6 +2618,22 @@ def handle_input(data, active_panel, sel_dev, sel_guest, sel_ap, sel_dc,
                     res["modal_action"] = "notify"
                 elif b == 0x20:
                     res["modal_action"] = "pause"
+            elif modal["type"] == "homematic":
+                cur = int(modal.get("scroll") or 0)
+                mx = int(modal.get("max_scroll") or 0)
+                if c in ("j", "J"):
+                    cur += 1
+                elif c in ("k", "K"):
+                    cur -= 1
+                elif c == " ":
+                    cur += 10
+                elif c == "b":
+                    cur -= 10
+                elif c == "g":
+                    cur = 0
+                elif c == "G":
+                    cur = mx
+                modal["scroll"] = max(0, min(mx, cur))
             elif modal["type"] == "pve_node":
                 if modal.get("pending"):
                     if c in ("j", "J"):

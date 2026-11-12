@@ -544,9 +544,13 @@ HomeMatic-Block. Er fasst die physischen Geräte der CCU zusammen:
   - `mäßig` = ≤ -85 dBm
   - Rohwerte > 127 sind unsigned Bytes (`194` → -62 dBm); `0`, `1`, `128`
     und `-65535` bedeuten „kein Messwert“
-- Abschnitte in Prioritätsreihenfolge (leer → offline → schwach → Funk); bei
-  Platzmangel steht `… +N weitere`, die vollständige Zahl steht in der
-  Überschrift
+- Abschnitte in Prioritätsreihenfolge (leer → offline → schwach → Funk);
+  Kopf und Zusammenfassung bleiben stehen, die Listen darunter sind
+  **scrollbar**:
+  - `↑`/`↓` oder `j`/`k` zeilenweise
+  - `PgUp`/`PgDn`, `Leertaste` / `b` seitenweise
+  - `g` / `G` an den Anfang / ans Ende
+  - in der Titelzeile steht der Ausschnitt, z. B. `[1-25/48]`
 - unten werden die Geräte **nach Typ gruppiert** (`15x HM-LC-Dim1T-DR · …`)
 
 Voraussetzung ist das Addon **XML-API** auf der CCU
