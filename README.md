@@ -19,6 +19,9 @@ Zeigt in einem mehrspaltigen ASCII-Layout:
 - **deCONZ/Phoscon-Block**: Anzahl der **konsolidierten** Zigbee-Geräte (mehrere
   Sensor-Ressourcen je Gerät werden zusammengefasst); Klick bzw. `Enter` zeigt
   Typen, online/offline und die **Akku-Übersicht** (schwach/leer/ohne Akku)
+- **HomeMatic-Block**: Geräte der CCU über die XML-API — live, Akku leer/schwach
+  und Funkverbindung sehr schlecht/mäßig; Klick bzw. `m` zeigt die Details
+  nach Problemgruppe und Gerätetyp
 - **Freie Pfeilnavigation**: ↑/↓/←/→ springen räumlich zum nächsten Element
   (Geräte-Subspalten, Proxmox-Guests, APs, deCONZ)
 - **Verwaltung im TUI**: Geräte anlegen / pausieren / löschen, Intervalle
@@ -47,9 +50,10 @@ Nur **Python 3 stdlib + `fping`** — kein pip, kein venv, kein Framework.
 | `proxmox.py`       | Fragt PVE-API ab (Nodes, VMs, CTs) → `proxmox.json`         |
 | `unifi.py`         | Fragt UniFi-Controller ab (APs, WLAN-Clients) → `unifi.json` |
 | `deconz.py`        | Fragt deCONZ/Phoscon ab (Lights, Sensoren) → `deconz.json`  |
+| `homematic.py`     | Fragt die HomeMatic-CCU über die XML-API ab → `homematic.json` |
 | `fritzbox.py`      | Liest WAN-/Leitungsdaten per TR-064 von der FRITZ!Box → `fritzbox.json` |
 | `speedtest.py`     | Minimaler Down/Up-Speedtest (Fallback) → `speed.json`       |
-| `scheduler.py`     | Sequenzieller Poller: startet Ping/Proxmox/UniFi/deCONZ/FRITZ!Box/Speedtest nacheinander |
+| `scheduler.py`     | Sequenzieller Poller: startet Ping/Proxmox/UniFi/deCONZ/HomeMatic/FRITZ!Box/Speedtest nacheinander |
 | `checker_loop.sh`  | Dünne Hülle für den systemd-Dienst `netbook-checker` → `scheduler.py` |
 | `boot_notify.py`   | Meldet nach dem Boot per ntfy, sobald Dashboard + Internet laufen |
 | `notify.py`        | ntfy-Versand (Topic aus `config.json`)                      |
@@ -60,10 +64,11 @@ Nur **Python 3 stdlib + `fping`** — kein pip, kein venv, kein Framework.
 
 | Taste                | Aktion                                                |
 |----------------------|-------------------------------------------------------|
-| `Tab`                | Panel wechseln (**Geraete** → **Proxmox** → **UniFi** → **deCONZ**) |
-| `↑`/`↓`/`←`/`→`, `j`/`k`/`h`/`l` | **Frei räumlich** zum nächsten Element in der Richtung (Geräte-Subspalten, Proxmox-Nodes/Guests, APs, deCONZ) |
+| `Tab`                | Panel wechseln (**Geraete** → **Proxmox** → **UniFi** → **deCONZ** → **HomeMatic**) |
+| `↑`/`↓`/`←`/`→`, `j`/`k`/`h`/`l` | **Frei räumlich** zum nächsten Element in der Richtung (Geräte-Subspalten, Proxmox-Nodes/Guests, APs, deCONZ, HomeMatic) |
 | `Enter`              | **Lightbox-Modal oeffnen** (Aktionen & Details)       |
-| Mausklick            | Auf eine AP-Zeile: **Geraete dieses APs**; auf den deCONZ-Block: **Typ-/Akku-Übersicht**; auf Node/Gast: **Server-/Gast-Modal**; auf die Statuszeile: **FRITZ!Box-Modal** |
+| Mausklick            | Auf eine AP-Zeile: **Geraete dieses APs**; auf den deCONZ-Block: **Typ-/Akku-Übersicht**; auf den HomeMatic-Block: **Akku-/Funk-Details**; auf Node/Gast: **Server-/Gast-Modal**; auf die Statuszeile: **FRITZ!Box-Modal** |
+| `m`                  | **HomeMatic-Modal** (live, Akku leer/schwach, Funk schlecht) |
 | `a`                  | **Geraet anlegen** (Name, IP/Host, optional HTTP-Port, Gruppe) |
 | `Space`              | **Geraet pausieren / wieder aktivieren** (kein Ping, zaehlt nicht mit) |
 | `d`                  | **Geraet loeschen** (mit Rueckfrage)                  |
@@ -137,6 +142,7 @@ In `config.json` (oder bequem per `c` im Dashboard):
 | `proxmox_interval_sec` | 30 | Sekunden zwischen PVE-Abfragen (Nodes, VMs, CTs) |
 | `unifi_interval_sec` | 60 | Sekunden zwischen UniFi-Abfragen (APs, WLAN-Clients) |
 | `deconz_interval_sec` | 60 | Sekunden zwischen deCONZ-Abfragen (Lights, Sensoren) |
+| `homematic_interval_sec` | 60 | Sekunden zwischen HomeMatic-CCU-Abfragen (XML-API) |
 | `fping_timeout` | 800 | ms pro Host |
 | `offline_after` | 3 | Fehlversuche in Folge, bis „Internet offline“ gilt |
 | `online_after` | 2 | Erfolge in Folge, bis „wieder online“ gilt |
@@ -152,7 +158,7 @@ kam die Zero 2 W schnell an ihre Grenzen. `scheduler.py` arbeitet deshalb so:
 
 - **immer nur ein Kindprozess** — keine parallelen HTTP-/SSH-Abfragen
 - **feste Reihenfolge/Priorität**: `checker` → `proxmox` → `fritzbox` →
-  `unifi` → `deconz` → `speedtest`
+  `unifi` → `deconz` → `homematic` → `speedtest`
 - **Phasenversatz** je Job (0/4/12/28/44 s), damit die Abfragen nicht bündeln
 - **Timeout** pro Job (30–90 s); ein hängender Job blockiert die anderen nicht
 - **Backoff** bei Fehlern: 2×, 4×, maximal 4× Intervall
@@ -487,6 +493,82 @@ Zugang in `config.json` (Modus 600, **nicht ins Repo**):
 
 Den API-Key legt man in Phoscon unter *Einstellungen → Gateway → API-Schlüssel*
 an (oder nutzt einen vorhandenen). Abgefragt wird `<url>/api/<apikey>/`.
+
+## HomeMatic-Block
+
+Unter dem deCONZ-Block steht – wieder durch eine Leerzeile abgesetzt – der
+HomeMatic-Block. Er fasst die physischen Geräte der CCU zusammen:
+
+```
+⌂ HomeMatic  92 Geraete  88 live
+  Akku 2 leer / 5 schwach · Funk 11 schlecht
+```
+
+- Farbe: grün = keine Auffälligkeit, gelb = mindestens ein Problem
+- **Klick auf den Block** oder Taste `m` öffnet das Detail-Modal; alternativ
+  `Tab` bis `HOMEMATIC [AKTIV]` und `Enter`
+- Reicht der Platz nur für eine Zeile (z. B. 100×30), wird kompakt
+  zusammengefasst: `⌂ HM 92 · 88 live · Akku 2 · Funk 11`
+- Ist die CCU nicht erreichbar, bleiben die letzten Zahlen mit Zeitstempel
+  stehen (`HomeMatic nicht erreichbar (vor 5m)`)
+
+### HomeMatic-Modal
+
+```
+╔══════════════════════════════════════════════════════════════════════╗
+║ HOMEMATIC CCU: 92 Geraete                                            ║
+╠══════════════════════════════════════════════════════════════════════╣
+║ live 88   4 offline                                                  ║
+║ Akku: 2 leer, 5 schwach, 13 ok                                       ║
+║ Funk: 11 sehr schlecht, 6 maessig (≤ -95 / -85 dBm)                  ║
+║──────────────────────────────────────────────────────────────────────║
+║ BATTERIE LEER (2)                                                    ║
+║   Heiz Esszimmer (2.0 V)                                             ║
+║   Rauch 3 - Büro                                                     ║
+║──────────────────────────────────────────────────────────────────────║
+║ NICHT ERREICHBAR (4)                                                 ║
+║   Heiz Esszimmer                                                     ║
+║   … +3 weitere                                                       ║
+╚══════════════════════════════════════════════════════════════════════╝
+```
+
+- **live** = Geräte mit `UNREACH=false`; virtuelle Geräte (z. B. `HM-RCV-50`,
+  `HmIP-CCU3`) haben keinen `UNREACH`-Datenpunkt und werden nicht mitgezählt
+- **Akku:** HomeMatic liefert keine Prozentwerte, nur `LOWBAT`/`LOW_BAT` und
+  `OPERATING_VOLTAGE`
+  - `leer` = `LOWBAT`/`LOW_BAT` aktiv **oder** ≤ 2,2 V
+  - `schwach` = ≤ 2,5 V
+  - `ok` = Gerät mit Akku, aber über den Schwellwerten
+- **Funk:** schlechtester Wert aus `RSSI_DEVICE` und `RSSI_PEER`
+  - `sehr schlecht` = ≤ -95 dBm
+  - `mäßig` = ≤ -85 dBm
+  - Rohwerte > 127 sind unsigned Bytes (`194` → -62 dBm); `0`, `1`, `128`
+    und `-65535` bedeuten „kein Messwert“
+- Abschnitte in Prioritätsreihenfolge (leer → offline → schwach → Funk); bei
+  Platzmangel steht `… +N weitere`, die vollständige Zahl steht in der
+  Überschrift
+- unten werden die Geräte **nach Typ gruppiert** (`15x HM-LC-Dim1T-DR · …`)
+
+Voraussetzung ist das Addon **XML-API** auf der CCU
+(`http://<ccu>/addons/xmlapi/`). Abgefragt werden `devicelist.cgi` (Name, Typ,
+Interface) und `statelist.cgi` (Zustände). Zugang in `config.json`
+(Modus 600, **nicht ins Repo**):
+
+```json
+"homematic_interval_sec": 60,
+"homematic": {
+  "enabled": true,
+  "url": "http://192.168.178.6/addons/xmlapi",
+  "timeout": 8,
+  "battery_empty_volt": 2.2,
+  "battery_weak_volt": 2.5,
+  "rssi_weak": -85,
+  "rssi_bad": -95
+}
+```
+
+Die Abfrage ist mit ~430 KB nicht ganz klein; der Job läuft deshalb nur alle
+60 s und braucht auf der Zero 2 W etwa 5 s (davon < 1 s CPU).
 
 ## Statusdauer
 

@@ -4,6 +4,7 @@ proxmox.json
 unifi.json
 deconz.json
 fritzbox.json
+homematic.json
 speed.json
 history.json
 dashboard.lock

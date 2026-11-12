@@ -134,6 +134,7 @@ SPEED = os.path.join(HERE, "speed.json")
 FRITZ = os.path.join(HERE, "fritzbox.json")
 UNI = os.path.join(HERE, "unifi.json")
 DECONZ = os.path.join(HERE, "deconz.json")
+HOMEMATIC = os.path.join(HERE, "homematic.json")
 CONFIG = os.path.join(HERE, "config.json")
 LOCK_FILE = os.path.join(HERE, "dashboard.lock")
 
@@ -1103,7 +1104,7 @@ LAST_LAYOUT = {}
 
 def render(w, h, state, prox, speed, uni, dc, frame, active_panel,
            sel_dev, sel_guest, sel_ap, sel_dc, msg, modal,
-           sel_node=0, sel_kind="guest", fb=None):
+           sel_node=0, sel_kind="guest", fb=None, hm=None):
     """Baut den kompletten Screen (inkl. evtl. Modal-Overlay)."""
     rows = []
     devs = (state or {}).get("devices", {})
@@ -1244,10 +1245,17 @@ def render(w, h, state, prox, speed, uni, dc, frame, active_panel,
         r_hdr = " PROXMOX + UNIFI [AKTIV] "
         l_border = CLR["dark"]
         r_border = CLR["cyan"] + BOLD
+    elif active_panel == 4:
+        l_hdr = " GERAETE "
+        r_hdr = " HOMEMATIC [AKTIV] "
+        l_border = CLR["dark"]
+        r_border = CLR["cyan"] + BOLD
 
     # Header-Linie (auf schmalen Terminals kuerzen)
     if vlen(r_hdr) > RW - 2:
-        r_hdr = r_hdr.replace(" + UNIFI", "").replace(" CLUSTER", "")
+        r_hdr = r_hdr.replace(" + UNIFI", "").replace(" + HM", "").replace(" CLUSTER", "")
+    if vlen(r_hdr) > RW - 2:
+        r_hdr = " ".join(r_hdr.split()[:2]) + " "
     if vlen(l_hdr) > LW - 2:
         l_hdr = " GERAETE "
     l_bar = BOX["h"] * 2 + l_hdr + BOX["h"] * max(0, LW - 2 - len(l_hdr))
@@ -1277,12 +1285,13 @@ def render(w, h, state, prox, speed, uni, dc, frame, active_panel,
     uni_hits = []
     uni_len = 0
     if rest > 0:
-        if dc and rest >= 5:
-            reserve = 2          # Leerzeile + deCONZ-Zeile
-        elif dc and rest == 4:
-            reserve = 1
-        else:
-            reserve = 0
+        reserve = 0
+        if dc:
+            reserve += 2          # Leerzeile + deCONZ-Zeile
+        if hm:
+            reserve += 3          # Leerzeile + HomeMatic-Block (2 Zeilen)
+        if reserve >= rest:
+            reserve = max(0, rest - 1)
         uni_max = max(1, rest - reserve) if reserve else rest
         uni_lines = build_unifi_lines(
             uni, RW, uni_max,
@@ -1292,13 +1301,29 @@ def render(w, h, state, prox, speed, uni, dc, frame, active_panel,
         rest = max(0, rest - uni_len)
     dc_hits = []
     dc_off = 0
+    dc_len = 0
     if dc and rest > 0:
         if rest >= 2:
             right_lines.append("")       # Abstand zum UniFi-Block
             dc_off = 1
             rest -= 1
-        right_lines += build_deconz_lines(
-            dc, RW, rest, active_panel == 3, dc_hits)
+        dc_lines = build_deconz_lines(dc, RW, rest, active_panel == 3, dc_hits)
+        right_lines += dc_lines
+        dc_len = len(dc_lines)
+        rest = max(0, rest - dc_len)
+    hm_hits = []
+    hm_off = 0
+    hm_len = 0
+    if hm and rest > 0:
+        if rest >= 2:
+            right_lines.append("")       # Abstand zum deCONZ-Block
+            hm_off = 1
+            rest -= 1
+        hm_lines = build_homematic_lines(
+            hm, RW, rest, active_panel == 4, hm_hits)
+        right_lines += hm_lines
+        hm_len = len(hm_lines)
+        rest = max(0, rest - hm_len)
 
     # Selektierbare Zeilen als 2D-Layout merken (Pfeilnavigation + Maus)
     nc_dev = 2 if LW >= 70 else 1
@@ -1321,6 +1346,11 @@ def render(w, h, state, prox, speed, uni, dc, frame, active_panel,
         items.append({"panel": 3, "idx": 0,
                       "row": 3 + len(prox_lines) + uni_len + dc_off + dc_hits[0],
                       "col": LW + 2 + RW // 2})
+    if hm_hits:
+        items.append({"panel": 4, "idx": 0,
+                      "row": 3 + len(prox_lines) + uni_len + dc_off + dc_len
+                             + hm_off + hm_hits[0],
+                      "col": LW + 2 + RW // 2})
 
     global LAST_LAYOUT
     LAST_LAYOUT = {
@@ -1329,6 +1359,8 @@ def render(w, h, state, prox, speed, uni, dc, frame, active_panel,
                      if r < body_h],
         "dc_hit": ((3 + len(prox_lines) + uni_len + dc_off + dc_hits[0])
                    if dc_hits else None),
+        "hm_hit": ((3 + len(prox_lines) + uni_len + dc_off + dc_len
+                    + hm_off + hm_hits[0]) if hm_hits else None),
         "items": items,
         "fritz_hit": 1 if (fb and fb.get("ok")) else None,
         "x0": LW + 2,
@@ -1361,6 +1393,9 @@ def render(w, h, state, prox, speed, uni, dc, frame, active_panel,
                 "f=FritzBox  c=Config  q=Ende")
     elif active_panel == 3:
         foot = (" Tab=Geraete  \u2191\u2193\u2190\u2192=frei wechseln  Enter=deCONZ-Details  "
+                "m=HomeMatic  f=FritzBox  c=Config  q=Ende")
+    elif active_panel == 4:
+        foot = (" Tab=Geraete  \u2191\u2193\u2190\u2192=frei wechseln  Enter=HomeMatic-Details  "
                 "f=FritzBox  c=Config  q=Ende")
     else:
         foot = " Tab=Geraete/UniFi  \u2191\u2193=Waehlen  Enter=Node/Gast-Modal  f=FritzBox  s=Start  x=Stop  p=Refresh  c=Config  q=Ende"
@@ -1379,6 +1414,9 @@ def render(w, h, state, prox, speed, uni, dc, frame, active_panel,
             if modal["type"] == "deconz":
                 mw = min(70, w - 4)
                 mlines = build_deconz_modal(modal, mw, max(8, h - 4))
+            elif modal["type"] == "homematic":
+                mw = min(72, w - 4)
+                mlines = build_homematic_modal(modal, mw, max(8, h - 4))
             else:
                 mw = min(60, w - 4)
                 if modal["type"] == "proxmox":
@@ -1761,6 +1799,234 @@ def build_deconz_lines(dc, w, max_lines, sel=False, hit_rows=None):
     return out[:max_lines] if max_lines is not None else out
 
 
+def _hm_counts(hm):
+    """(total, live, leer, schwach, schlecht, offline)."""
+    hm = hm or {}
+    total = int(hm.get("total") or 0)
+    live = int(hm.get("live") or 0)
+    return (total, live, int(hm.get("battery_empty") or 0),
+            int(hm.get("battery_weak") or 0), int(hm.get("rssi_bad") or 0),
+            int(hm.get("unreach") or 0))
+
+
+def build_homematic_lines(hm, w, max_lines, sel=False, hit_rows=None):
+    """Kompakter HomeMatic-Block: Anzahl, Akku- und Funk-Auffaelligkeiten."""
+    out = []
+    if not hm:
+        out.append(CLR["dark"] + " \u2302 HomeMatic: keine Daten" + RST)
+        if hit_rows is not None:
+            hit_rows.append(0)
+        return out
+
+    total, live, empty, weak, bad, offline = _hm_counts(hm)
+    if not hm.get("ok"):
+        age = human_age(time.time() - (hm.get("ts") or 0))
+        out.append(CLR["red"] + " \u2302 HomeMatic nicht erreichbar" + RST
+                   + CLR["dark"] + " (vor {})".format(age) + RST)
+        if hit_rows is not None:
+            hit_rows.append(0)
+        return out
+
+    if offline or empty or bad:
+        hc = CLR["yellow"]
+    else:
+        hc = CLR["green"]
+
+    if max_lines is not None and max_lines < 2:
+        # Nur eine Zeile Platz: kompakte Zusammenfassung statt reiner Anzahl.
+        variants = [
+            "HomeMatic {} \u00b7 {} live \u00b7 Akku {} \u00b7 Funk {}".format(
+                total, live, empty, bad),
+            "HM {} \u00b7 {} live \u00b7 Akku {} \u00b7 Funk {}".format(
+                total, live, empty, bad),
+            "HM {} \u00b7 {} live \u00b7 A{} \u00b7 F{}".format(
+                total, live, empty, bad),
+            "HM{} {}live A{} F{}".format(total, live, empty, bad),
+        ]
+        text = variants[-1]
+        for cand in variants:
+            if vlen(cand) + 2 <= w:
+                text = cand
+                break
+        line1 = "{}\u2302 {}{}".format(hc, text, RST)
+        if sel:
+            line1 = hl(line1, w)
+        if hit_rows is not None:
+            hit_rows.append(0)
+        return [clip(line1, w) if vlen(line1) > w else line1]
+
+    if w >= 40:
+        line1 = "{}\u2302 {}{}HomeMatic{}  {} Geraete  {} live".format(
+            hc, BOLD, hc, RST, total, live)
+    else:
+        line1 = "{}\u2302 HM {} \u00b7 {} live{}".format(hc, total, live, RST)
+    if sel:
+        line1 = hl(line1, w)
+    if hit_rows is not None:
+        hit_rows.append(0)
+    out.append(line1)
+
+    def _num(value, color):
+        return color + str(value) + RST
+
+    if w >= 40:
+        line2 = "  Akku {} leer / {} schwach \u00b7 Funk {} schlecht{}".format(
+            _num(empty, CLR["red"] if empty else CLR["green"]),
+            _num(weak, CLR["yellow"] if weak else CLR["green"]),
+            _num(bad, CLR["red"] if bad else CLR["green"]),
+            RST)
+    elif w >= 24:
+        line2 = "  {} leer \u00b7 {} schwach \u00b7 {} schlecht{}".format(
+            _num(empty, CLR["red"] if empty else CLR["green"]),
+            _num(weak, CLR["yellow"] if weak else CLR["green"]),
+            _num(bad, CLR["red"] if bad else CLR["green"]),
+            RST)
+    else:
+        line2 = "  A{}/{}  F{}{}".format(
+            _num(empty, CLR["red"] if empty else CLR["green"]),
+            _num(weak, CLR["yellow"] if weak else CLR["green"]),
+            _num(bad, CLR["red"] if bad else CLR["green"]), RST)
+    out.append(clip(line2, w) if vlen(line2) > w else line2)
+    return out[:max_lines] if max_lines is not None else out
+
+
+def open_homematic_modal(hm):
+    if not hm:
+        return None
+    return {"type": "homematic", "data": hm}
+
+
+def build_homematic_modal(modal, mw, max_rows=None):
+    """HomeMatic-Modal: Akku- und Funkprobleme nach Gruppen, danach Typen."""
+    hm = modal.get("data") or {}
+    problems = hm.get("problems") or {}
+
+    mbg = CLR["modalbg"]
+    mhi = CLR["modalhi"]
+
+    def mline(content):
+        return mbg + MBOX["v"] + " " + padto(content, mw - 4) + " " + MBOX["v"] + RST
+
+    def msep(char="\u2500"):
+        return mbg + MBOX["v"] + char * (mw - 2) + MBOX["v"] + RST
+
+    def volt_txt(item):
+        v = item.get("volt")
+        return " ({:.1f} V)".format(v) if v is not None else ""
+
+    def rssi_txt(item):
+        r = item.get("rssi")
+        return " ({} dBm)".format(r) if r is not None else ""
+
+    lines = []
+    lines.append(mbg + MBOX["tl"] + MBOX["h"] * (mw - 2) + MBOX["tr"] + RST)
+
+    total, live, empty, weak, bad, offline = _hm_counts(hm)
+    title = "HOMEMATIC CCU: {} Geraete".format(total)
+    lines.append(mhi + MBOX["v"] + " " + padto(clip(title, mw - 4), mw - 4)
+                 + " " + MBOX["v"] + RST)
+    lines.append(mbg + MBOX["lt"] + MBOX["h"] * (mw - 2) + MBOX["rt"] + RST)
+
+    if not hm.get("ok"):
+        err = hm.get("error") or "keine Daten"
+        lines.append(mline(CLR["red"] + BOLD + "NICHT ERREICHBAR" + RST))
+        lines.append(mline(CLR["gray"] + clip(err, mw - 4) + RST))
+        lines.append(msep())
+        lines.append(mline(CLR["gray"] + "[ESC] oder [q] schliessen" + RST))
+        lines.append(mbg + MBOX["bl"] + MBOX["h"] * (mw - 2) + MBOX["br"] + RST)
+        return lines
+
+    stat = "{}live {}{}".format(CLR["green"] + BOLD, live, RST)
+    if offline:
+        stat += "   " + CLR["red"] + "{} offline".format(offline) + RST
+    lines.append(mline(stat))
+
+    lines.append(mline("{}Akku:{} {}{} leer{}, {}{} schwach{}, {} ok".format(
+        CLR["cyan"], RST,
+        CLR["red"], empty, RST,
+        CLR["yellow"], weak, RST,
+        int(hm.get("battery_ok") or 0))))
+    lines.append(mline("{}Funk:{} {}{} sehr schlecht{}, {}{} maessig{} (\u2264 {} / {} dBm)".format(
+        CLR["cyan"], RST,
+        CLR["red"], bad, RST,
+        CLR["yellow"], int(hm.get("rssi_poor") or 0), RST,
+        int(hm.get("rssi_bad_limit") or -95),
+        int(hm.get("rssi_weak_limit") or -85))))
+
+    # Abschnitte in Prioritaetsreihenfolge; bei Platzmangel werden Listen gekuerzt.
+    sections = [
+        ("BATTERIE LEER", CLR["red"],
+         [(p["name"] + volt_txt(p), "") for p in (problems.get("empty") or [])]),
+        ("NICHT ERREICHBAR", CLR["red"],
+         [(p["name"], "") for p in (problems.get("offline") or [])]),
+        ("BATTERIE SCHWACH", CLR["yellow"],
+         [(p["name"] + volt_txt(p), "") for p in (problems.get("weak") or [])]),
+        ("FUNK SEHR SCHLECHT", CLR["red"],
+         [(p["name"], rssi_txt(p)) for p in (problems.get("bad") or [])]),
+        ("FUNK MAESSIG", CLR["yellow"],
+         [(p["name"], rssi_txt(p)) for p in (problems.get("poor") or [])]),
+    ]
+
+    # Typen-Uebersicht als Zeilenblöcke (unten, wenn Platz bleibt).
+    types = hm.get("types") or []
+    type_chunks = []
+    text = ""
+    for t in types:
+        part = "{}x {}".format(t.get("total", 0), t.get("type") or "?")
+        if text and vlen(text) + len(part) + 3 > mw - 6:
+            type_chunks.append(text)
+            text = part
+        else:
+            text = (text + " \u00b7 " + part) if text else part
+    if text:
+        type_chunks.append(text)
+
+    # Platz: Kopf/Summen stehen schon, unten kommen Trennlinie, Stand, Rahmen.
+    avail = (max_rows - len(lines) - 3) if max_rows else 999
+    # Typen-Uebersicht nur reservieren, wenn danach noch Platz fuer Listen bleibt.
+    if type_chunks and avail >= 18:
+        type_rows = 4
+    elif type_chunks and avail >= 10:
+        type_rows = 3
+    else:
+        type_rows = 0
+    budget = max(0, avail - type_rows)
+    for head, color, items in sections:
+        if not items or budget < 3:
+            continue
+        lines.append(msep())
+        budget -= 1
+        lines.append(mline(color + BOLD + "{} ({}){}".format(
+            head, len(items), RST)))
+        budget -= 1
+        room = budget
+        if len(items) <= room:
+            show = len(items)
+        else:
+            show = max(1, room - 1)      # mind. 1 Eintrag, sonst "+N weitere"
+        for name, extra in items[:show]:
+            text = "  " + clip(name, max(10, mw - 10 - vlen(extra))) + extra
+            lines.append(mline(text))
+        budget -= show
+        if show < len(items) and budget > 0:
+            lines.append(mline(CLR["dark"] + "  \u2026 +{} weitere".format(
+                len(items) - show) + RST))
+            budget -= 1
+
+    type_room = max(budget, type_rows)
+    if type_chunks and type_room >= 3:
+        lines.append(msep())
+        lines.append(mline(CLR["cyan"] + BOLD + "NACH TYP" + RST))
+        for chunk in type_chunks[:type_room - 2]:
+            lines.append(mline("  " + chunk))
+
+    lines.append(msep())
+    lines.append(mline(CLR["gray"] + "Stand {}   [ESC]/[q] schliessen".format(
+        fmt_ts(hm.get("ts"))) + RST))
+    lines.append(mbg + MBOX["bl"] + MBOX["h"] * (mw - 2) + MBOX["br"] + RST)
+    return lines
+
+
 def open_deconz_modal(dc):
     """Baut das deCONZ-Modal (Geraete nach Typ gruppiert)."""
     if not dc:
@@ -2129,7 +2395,7 @@ def spatial_target(panel, sel_dev, sel_guest, sel_ap, sel_dc, key,
 
 def handle_input(data, active_panel, sel_dev, sel_guest, sel_ap, sel_dc,
                  num_devs, num_guests, num_aps, num_dc, modal,
-                 sel_node=0, sel_kind="guest"):
+                 sel_node=0, sel_kind="guest", num_hm=0):
     """
     Parst beliebige Terminal-Sequenzen vollstaendig und nicht-blockierend.
     Returns: dict mit 'quit', 'active_panel', 'sel_dev', 'sel_guest',
@@ -2288,6 +2554,8 @@ def handle_input(data, active_panel, sel_dev, sel_guest, sel_ap, sel_dc,
                 order.append(2)
             if num_dc:
                 order.append(3)
+            if num_hm:
+                order.append(4)
             if res["active_panel"] in order:
                 pos = order.index(res["active_panel"])
                 res["active_panel"] = order[(pos + 1) % len(order)]
@@ -2354,6 +2622,8 @@ def handle_input(data, active_panel, sel_dev, sel_guest, sel_ap, sel_dc,
             res["action"] = "config"
         elif c in ("f", "F"):
             res["action"] = "fritz"
+        elif c in ("m", "M"):
+            res["action"] = "homematic"
         elif c in ("d", "D"):
             res["action"] = "delete_device"
         elif b == 0x20:
@@ -2635,11 +2905,13 @@ def main():
             fb = load(FRITZ)
             uni = load(UNI)
             dc = load(DECONZ)
+            hm = load(HOMEMATIC)
 
             dev_items = flat_devices(CFG)
             guest_items = flat_guests(prox)
             ap_items = (uni or {}).get("aps") or []
             has_dc = bool(dc)
+            has_hm = bool(hm)
 
             if sel_dev >= len(dev_items):
                 sel_dev = max(0, len(dev_items) - 1)
@@ -2654,6 +2926,8 @@ def main():
                 active_panel = 1
             if active_panel == 3 and not has_dc:
                 active_panel = 1
+            if active_panel == 4 and not has_hm:
+                active_panel = 1
 
             # Offenes AP-Modal mit frischen Daten versorgen
             if modal and modal.get("type") == "unifi":
@@ -2665,6 +2939,8 @@ def main():
                                         if c.get("ap_mac") == mac]
             if modal and modal.get("type") == "deconz":
                 modal["data"] = dc or modal.get("data")
+            if modal and modal.get("type") == "homematic":
+                modal["data"] = hm or modal.get("data")
             if modal and modal.get("type") == "pve_node":
                 ni = modal.get("node_idx", 0)
                 nodes = (prox or {}).get("nodes") or []
@@ -2694,7 +2970,7 @@ def main():
 
             rows = render(w, h, state, prox, speed, uni, dc, frame,
                           active_panel, sel_dev, sel_guest, sel_ap, sel_dc,
-                          msg, modal, sel_node, sel_kind, fb=fb)
+                          msg, modal, sel_node, sel_kind, fb=fb, hm=hm)
             safe_write(ESC + "[H" + "\n".join(rows) + RST)
             frame += 1
 
@@ -2765,6 +3041,12 @@ def main():
                             active_panel = 3
                             sel_dc = 0
                             modal = open_deconz_modal(dc)
+                            hit = True
+                        if (not hit and hm
+                                and LAST_LAYOUT.get("hm_hit") == my
+                                and x0 <= mx <= x1):
+                            active_panel = 4
+                            modal = open_homematic_modal(hm)
                 data = MOUSE_RE.sub(b"", data)
                 if not data:
                     continue
@@ -2772,7 +3054,7 @@ def main():
             inp = handle_input(data, active_panel, sel_dev, sel_guest, sel_ap,
                                sel_dc, len(dev_items), len(guest_items),
                                len(ap_items), 1 if has_dc else 0, modal,
-                               sel_node, sel_kind)
+                               sel_node, sel_kind, 1 if has_hm else 0)
 
             if inp["quit"]:
                 break
@@ -2787,7 +3069,9 @@ def main():
 
             # Modal oeffnen
             if inp["open_modal"] and not modal:
-                if active_panel == 3 and dc:
+                if active_panel == 4 and hm:
+                    modal = open_homematic_modal(hm)
+                elif active_panel == 3 and dc:
                     modal = open_deconz_modal(dc)
                 elif active_panel == 2 and ap_items:
                     modal = open_unifi_modal(uni, sel_ap)
@@ -2923,6 +3207,8 @@ def main():
                 modal = open_config_form()
             elif act == "fritz":
                 modal = {"type": "fritz", "data": fb}
+            elif act == "homematic":
+                modal = open_homematic_modal(hm)
             elif act == "delete_device" and active_panel == 0 and dev_items:
                 gid, lbl, d = dev_items[sel_dev]
                 modal = {

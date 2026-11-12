@@ -37,6 +37,8 @@ JOBS = (
      "default": 60, "phase": 28, "timeout": 40, "critical": False},
     {"name": "deconz", "script": "deconz.py", "key": "deconz_interval_sec",
      "default": 60, "phase": 44, "timeout": 30, "critical": False},
+    {"name": "homematic", "script": "homematic.py", "key": "homematic_interval_sec",
+     "default": 60, "phase": 36, "timeout": 30, "slow": 12, "critical": False},
     {"name": "speedtest", "script": "speedtest.py", "key": "speedtest_interval_min",
      "default": 30, "phase": 120, "timeout": 90, "critical": False,
      "factor": 60, "fritz_guard": True},
@@ -167,7 +169,7 @@ def main():
                     print("{}: {} fehlgeschlagen (rc={}, {:.1f}s), naechster Versuch in {}s"
                           .format(time.strftime("%H:%M:%S"), name, rc,
                                   duration, delay), flush=True)
-                if duration > 5.0 and rc == 0:
+                if duration > job.get("slow", 5.0) and rc == 0:
                     print("{}: {} langsam ({:.1f}s)".format(
                         time.strftime("%H:%M:%S"), name, duration), flush=True)
                 due[name] = time.time() + delay
