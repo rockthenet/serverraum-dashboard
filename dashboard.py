@@ -1057,7 +1057,9 @@ def build_form_modal(modal, mw):
 
     for idx, f in enumerate(modal["fields"]):
         val = f["value"]
-        if f.get("type") == "select":
+        if f.get("secret") and val:
+            val = "\u2022" * len(val)
+        elif f.get("type") == "select":
             val = "< {} >".format(val if val else "-")
         cursor = "\u258f" if idx == modal.get("focus") else ""
         content = " {:<10}{}{}".format(f["label"] + ":", val, cursor)
@@ -1065,9 +1067,11 @@ def build_form_modal(modal, mw):
             content = CLR["modalhi"] + padto(content, mw - 4) + RST
         lines.append(mline(content))
 
-    if modal.get("hint"):
+    hint = modal.get("hint")
+    if hint:
         lines.append(msep())
-        lines.append(mline(CLR["gray"] + modal["hint"] + RST))
+        for hline in ([hint] if isinstance(hint, str) else hint):
+            lines.append(mline(CLR["gray"] + hline + RST))
     if modal.get("error"):
         lines.append(mline(CLR["red"] + BOLD + modal["error"] + RST))
     else:
@@ -3184,7 +3188,7 @@ def open_config_form():
     return {
         "type": "form",
         "kind": "config",
-        "title": "INTERVALLE & MELDUNGEN",
+        "title": "INTERVALLE, NTFY & MELDUNGEN",
         "focus": 0,
         "error": None,
         "fields": [
@@ -3196,8 +3200,14 @@ def open_config_form():
              "value": str(CFG.get("offline_after", 3)), "max": 2},
             {"key": "online", "label": "Online ab", "type": "text",
              "value": str(CFG.get("online_after", 2)), "max": 2},
+            {"key": "ntfy", "label": "ntfy-Kanal", "type": "text",
+             "value": str(CFG.get("ntfy_topic") or ""), "max": 64},
+            {"key": "ntfy_token", "label": "ntfy-Token", "type": "text",
+             "value": str(CFG.get("ntfy_token") or ""), "max": 64,
+             "secret": True},
         ],
-        "hint": "Ping 5-3600 s | Speed 1-1440 min | Offline/Online ab = Fehlversuche bzw. Erfolge in Folge (1-20)",
+        "hint": ["Ping 5-3600s | Speed 1-1440min | Off/On 1-20",
+                 "Kanal: a-z A-Z 0-9 - _   Token optional (leer = ohne)"],
     }
 
 
@@ -3294,14 +3304,26 @@ def apply_form(modal):
             return "Offline ab: 1-20 Fehlversuche", None
         if not 1 <= on <= 20:
             return "Online ab: 1-20 Erfolge", None
+        topic = vals.get("ntfy", "").strip()
+        token = vals.get("ntfy_token", "").strip()
+        if topic and not re.match(r"^[A-Za-z0-9_-]{1,64}$", topic):
+            return "ntfy-Kanal: nur a-z, A-Z, 0-9, - und _ (1-64)", None
         CFG["poll_interval"] = poll
         CFG["speedtest_interval_min"] = speed
         CFG["offline_after"] = off
         CFG["online_after"] = on
+        if topic:
+            CFG["ntfy_topic"] = topic
+        else:
+            CFG.pop("ntfy_topic", None)
+        if token:
+            CFG["ntfy_token"] = token
+        else:
+            CFG.pop("ntfy_token", None)
         save_config(CFG)
         run_checker_now()
-        return None, "Ping {}s, Speed {}min, offline ab {}, online ab {}".format(
-            poll, speed, off, on)
+        return None, "Ping {}s, Speed {}min, offline ab {}, online ab {}, ntfy {}".format(
+            poll, speed, off, on, topic or "aus")
 
     return "unbekanntes Formular", None
 

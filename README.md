@@ -57,7 +57,7 @@ Nur **Python 3 stdlib + `fping`** — kein pip, kein venv, kein Framework.
 | `scheduler.py`     | Sequenzieller Poller: startet Ping/Proxmox/UniFi/deCONZ/HomeMatic/Thread/FRITZ!Box/Speedtest nacheinander |
 | `checker_loop.sh`  | Dünne Hülle für den systemd-Dienst `netbook-checker` → `scheduler.py` |
 | `boot_notify.py`   | Meldet nach dem Boot per ntfy, sobald Dashboard + Internet laufen |
-| `notify.py`        | ntfy-Versand (Topic aus `config.json`)                      |
+| `notify.py`        | ntfy-Versand (Kanal/Token aus `config.json`)                |
 | `bin/dashboard`    | Shell-Befehl `dashboard` zum Starten der TUI                |
 | `config.json`      | Geräteliste + Proxmox-/UniFi-/deCONZ-/HomeMatic-/Thread-/FRITZ!Box-Zugangsdaten + Intervalle (**nicht im Repo**) |
 
@@ -75,7 +75,7 @@ Nur **Python 3 stdlib + `fping`** — kein pip, kein venv, kein Framework.
 | `e`                  | Im Geräte-Modal: **Geraet bearbeiten** (Name, IP/Host, HTTP-Port, Gruppe) |
 | `Space`              | **Geraet pausieren / wieder aktivieren** (kein Ping, zaehlt nicht mit) |
 | `d`                  | **Geraet loeschen** (mit Rueckfrage)                  |
-| `c`                  | **Intervalle + Meldungen einstellen** (Ping, Speedtest, Offline/Online ab) |
+| `c`                  | **Intervalle + ntfy + Meldungen einstellen** (Ping, Speedtest, Offline/Online ab, ntfy-Kanal/-Token) |
 | `f`                  | **FRITZ!Box-Modal** (Leitung, aktuelle Auslastung, Peak, Traffic) |
 | `n`                  | Im Geräte-Modal: **ntfy-Meldung** umschalten (aus → down → up → beides); im deCONZ-/HomeMatic-/Thread-Modal: **Meldungen ein/aus** |
 | `1`..`5`             | Im Proxmox-Guest-Modal: Start / Shutdown / Reboot / Reset / Backup |
@@ -188,6 +188,34 @@ In `config.json` (oder bequem per `c` im Dashboard):
 `checker_loop.sh` ist nur noch eine Hülle um **`scheduler.py`**. Der Scheduler
 liest die Werte vor jedem Job neu — Änderungen greifen sofort, ohne
 Dienst-Neustart.
+
+### ntfy-Kanal und Token im Dashboard (`c`)
+
+Das Konfig-Menü (`c`) enthält neben den Intervallen auch den **ntfy-Kanal** und
+optional einen **ntfy-Token**:
+
+```
+╔══════════════════════════════════════════════════════════════╗
+║ INTERVALLE, NTFY & MELDUNGEN                                 ║
+╠══════════════════════════════════════════════════════════════╣
+║  Ping (s):  15                                              ║
+║  Speed (min):30                                             ║
+║  Offline ab:3                                               ║
+║  Online ab: 2                                               ║
+║  ntfy-Kanal:diegraefte2024                                  ║
+║  ntfy-Token:••••••••                                        ║
+╠══════════════════════════════════════════════════════════════╣
+║ Kanal: a-z A-Z 0-9 - _   Token optional (leer = ohne)        ║
+╚══════════════════════════════════════════════════════════════╝
+```
+
+- der Kanal wird mit dem bekannten Namen **vorbelegt**; erlaubt sind
+  `a-z A-Z 0-9 - _` (1–64 Zeichen). Bleibt das Feld leer, ist der Versand aus
+- der Token ist optional und wird **maskiert** angezeigt (Punkte); er landet
+  als `ntfy_token` in `config.json` (Modus 600) und wird als
+  `Authorization: Bearer …` mitgeschickt (ntfy-Access-Token). Feld leer lassen
+  heißt: weiterhin ohne Zugangsdaten senden
+- beides gilt sofort für alle Poller und Meldungen, ohne Dienst-Neustart
 
 ### Sequenzieller Scheduler (Performance)
 

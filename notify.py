@@ -9,12 +9,17 @@ HERE = os.path.dirname(os.path.abspath(__file__))
 CONFIG = os.path.join(HERE, "config.json")
 
 
-def _topic():
+def _config():
     try:
         with open(CONFIG) as f:
-            return json.load(f).get("ntfy_topic")
+            data = json.load(f)
+        return data if isinstance(data, dict) else {}
     except Exception:
-        return None
+        return {}
+
+
+def _topic():
+    return _config().get("ntfy_topic")
 
 
 def diff(prev_names, new_names):
@@ -35,11 +40,17 @@ def join_names(names, limit=8):
 
 
 def send(message, title=None, tags=None, priority=None):
-    """Schickt eine Push-Nachricht an ntfy.sh/<topic>. Fehler werden ignoriert."""
-    topic = _topic()
+    """Schickt eine Push-Nachricht an ntfy.sh/<topic>. Fehler werden ignoriert.
+
+    Optionaler Zugang: ``ntfy_token`` in config.json wird als
+    ``Authorization: Bearer <token>`` mitgeschickt (ntfy-Access-Token).
+    """
+    cfg = _config()
+    topic = cfg.get("ntfy_topic")
     if not topic:
         return False
-    url = "https://ntfy.sh/" + topic
+    url = "https://ntfy.sh/" + str(topic)
+    token = str(cfg.get("ntfy_token") or "").strip()
     try:
         data = message.encode("utf-8")
         req = urllib.request.Request(url, data=data, method="POST")
@@ -49,6 +60,8 @@ def send(message, title=None, tags=None, priority=None):
             req.add_header("Tags", tags)
         if priority:
             req.add_header("Priority", str(priority))
+        if token:
+            req.add_header("Authorization", "Bearer " + token)
         urllib.request.urlopen(req, timeout=8)
         return True
     except Exception:

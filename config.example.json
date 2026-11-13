@@ -311,6 +311,7 @@
     }
   },
   "ntfy_topic": "dein-ntfy-topic",
+  "ntfy_token": "",
   "proxmox_nodes": [
     {
       "label": "Proxmox 1 (pve)",
