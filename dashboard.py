@@ -136,6 +136,7 @@ FRITZ = os.path.join(HERE, "fritzbox.json")
 UNI = os.path.join(HERE, "unifi.json")
 DECONZ = os.path.join(HERE, "deconz.json")
 HOMEMATIC = os.path.join(HERE, "homematic.json")
+THREAD = os.path.join(HERE, "thread.json")
 CONFIG = os.path.join(HERE, "config.json")
 LOCK_FILE = os.path.join(HERE, "dashboard.lock")
 
@@ -1210,7 +1211,7 @@ LAST_LAYOUT = {}
 
 def render(w, h, state, prox, speed, uni, dc, frame, active_panel,
            sel_dev, sel_guest, sel_ap, sel_dc, msg, modal,
-           sel_node=0, sel_kind="guest", fb=None, hm=None):
+           sel_node=0, sel_kind="guest", fb=None, hm=None, th=None):
     """Baut den kompletten Screen (inkl. evtl. Modal-Overlay)."""
     rows = []
     devs = (state or {}).get("devices", {})
@@ -1396,6 +1397,8 @@ def render(w, h, state, prox, speed, uni, dc, frame, active_panel,
             reserve += 3          # Leerzeile + deCONZ-Block (2 Zeilen)
         if hm:
             reserve += 3          # Leerzeile + HomeMatic-Block (2 Zeilen)
+        if th:
+            reserve += 2          # Leerzeile + Thread-Block (1 Zeile)
         if reserve >= rest:
             reserve = max(0, rest - 1)
         uni_max = max(1, rest - reserve) if reserve else rest
@@ -1430,6 +1433,18 @@ def render(w, h, state, prox, speed, uni, dc, frame, active_panel,
         right_lines += hm_lines
         hm_len = len(hm_lines)
         rest = max(0, rest - hm_len)
+    th_hits = []
+    th_off = 0
+    th_len = 0
+    if th and rest > 0:
+        if rest >= 2:
+            right_lines.append("")       # Abstand zum HomeMatic-Block
+            th_off = 1
+            rest -= 1
+        th_lines = build_thread_lines(th, RW, rest, th_hits)
+        right_lines += th_lines
+        th_len = len(th_lines)
+        rest = max(0, rest - th_len)
 
     # Selektierbare Zeilen als 2D-Layout merken (Pfeilnavigation + Maus)
     nc_dev = 2 if LW >= 70 else 1
@@ -1467,6 +1482,9 @@ def render(w, h, state, prox, speed, uni, dc, frame, active_panel,
                    if dc_hits else None),
         "hm_hit": ((3 + len(prox_lines) + uni_len + dc_off + dc_len
                     + hm_off + hm_hits[0]) if hm_hits else None),
+        "th_hit": ((3 + len(prox_lines) + uni_len + dc_off + dc_len
+                    + hm_off + hm_len + th_off + th_hits[0])
+                   if th_hits else None),
         "items": items,
         "dev_hits": [(3 + r, 1 + ci * (cw_dev + 1),
                       1 + ci * (cw_dev + 1) + cw_dev - 1, di)
@@ -1536,6 +1554,9 @@ def render(w, h, state, prox, speed, uni, dc, frame, active_panel,
                 elif modal["type"] == "fritz":
                     mw = min(66, w - 4)
                     mlines = build_fritz_modal(modal, mw)
+                elif modal["type"] == "thread":
+                    mw = min(72, w - 4)
+                    mlines = build_thread_modal(modal, mw)
                 elif modal["type"] == "device":
                     mlines = build_device_modal(modal, mw)
                 elif modal["type"] == "form":
@@ -1545,6 +1566,7 @@ def render(w, h, state, prox, speed, uni, dc, frame, active_panel,
         mh = len(mlines)
         sx = (w - mw) // 2
         sy = max(2, (h - mh) // 2)
+        LAST_LAYOUT["modal_rect"] = (sx, sy, mw, mh)
 
         for ri, mline in enumerate(mlines):
             y = sy + ri
@@ -1985,6 +2007,158 @@ def build_deconz_lines(dc, w, max_lines, sel=False, hit_rows=None):
             _num(bad, CLR["red"] if bad else CLR["green"]), RST)
     out.append(clip(line2, w) if vlen(line2) > w else line2)
     return out[:max_lines] if max_lines is not None else out
+
+
+def build_thread_lines(th, w, max_lines, hit_rows=None):
+    """Kompakter Thread-Border-Router-Block (Port + optional ADB-Status)."""
+    out = []
+    if not th:
+        if hit_rows is not None:
+            hit_rows.append(0)
+        return out
+
+    adb = th.get("adb") or {}
+    thread_state = adb.get("thread") or "unknown"
+    host = th.get("host") or "?"
+    port = th.get("port") or 8008
+
+    if not th.get("ok"):
+        age = human_age(time.time() - (th.get("ts") or 0))
+        long_line = ("{}\u2301 Thread-BR {}:{} offline{}".format(
+            CLR["red"], host, port, RST))
+        long_age = (long_line + CLR["dark"] + " (vor {})".format(age) + RST)
+        medium_line = "{}\u2301 Thread {}:{} offline{}".format(
+            CLR["red"], host, port, RST)
+        short_line = "{}\u2301 T{} offline{}".format(CLR["red"], port, RST)
+        for line in (long_age, long_line, medium_line, short_line):
+            if vlen(line) <= w:
+                break
+        if hit_rows is not None:
+            hit_rows.append(0)
+        return [clip(line, w) if vlen(line) > w else line]
+
+    if thread_state == "active":
+        tc, label = CLR["green"], "BR aktiv"
+    elif thread_state == "inactive":
+        tc, label = CLR["red"], "BR INAKTIV"
+    elif adb.get("state") == "unauthorized":
+        tc, label = CLR["yellow"], "ADB bestaetigen"
+    elif adb.get("state") == "missing":
+        tc, label = CLR["yellow"], "ADB fehlt"
+    elif adb.get("state") == "device":
+        tc, label = CLR["yellow"], "Thread unbekannt"
+    else:
+        tc, label = CLR["yellow"], "nur Port"
+
+    up = th.get("uptime")
+    up_txt = " \u00b7 up {}".format(human_age(up)) if up else ""
+    long_line = "{}\u2301 {}{}Thread-BR{} {}:{} ok{} \u00b7 {}{}{}".format(
+        CLR["green"], BOLD, CLR["green"], RST, host, port, RST,
+        tc, label, RST)
+    long_up = long_line + CLR["dark"] + up_txt + RST if up_txt else long_line
+    medium_line = "{}\u2301 Thread {}:{} \u00b7 {}{}{}".format(
+        CLR["green"], host, port, tc, label, RST)
+    short_line = "{}\u2301 T{} \u00b7 {}{}{}".format(
+        CLR["green"], port, tc, label, RST)
+    for line in (long_up, long_line, medium_line, short_line):
+        if vlen(line) <= w:
+            break
+
+    if hit_rows is not None:
+        hit_rows.append(0)
+    out.append(clip(line, w) if vlen(line) > w else line)
+    return out[:max_lines] if max_lines is not None else out
+
+
+def open_thread_modal(th):
+    if not th:
+        return None
+    return {"type": "thread", "data": th}
+
+
+def build_thread_modal(modal, mw):
+    """Details zum Thread-Border-Router (Port, Uptime, ADB/Thread-Status)."""
+    th = modal.get("data") or {}
+    adb = th.get("adb") or {}
+    mbg = CLR["modalbg"]
+    mhi = CLR["modalhi"]
+    lines = []
+
+    def mline(content):
+        return mbg + MBOX["v"] + " " + padto(content, mw - 4) + " " + MBOX["v"] + RST
+
+    def msep():
+        return mbg + MBOX["v"] + "\u2500" * (mw - 2) + MBOX["v"] + RST
+
+    lines.append(mbg + MBOX["tl"] + MBOX["h"] * (mw - 2) + MBOX["tr"] + RST)
+    title = "THREAD-BORDER-ROUTER: {}".format(th.get("name") or th.get("host") or "?")
+    lines.append(mhi + MBOX["v"] + " " + padto(clip(title, mw - 4), mw - 4)
+                 + " " + MBOX["v"] + RST)
+    lines.append(mbg + MBOX["lt"] + MBOX["h"] * (mw - 2) + MBOX["rt"] + RST)
+
+    host = th.get("host") or "?"
+    port = th.get("port") or 8008
+    lines.append(mline("Adresse: {}:{}".format(host, port)))
+    if th.get("ok"):
+        lines.append(mline("Port:    {} (TCP ok, {:.1f} ms)".format(
+            CLR["green"] + "offen" + RST, th.get("rtt_ms") or 0)))
+    else:
+        lines.append(mline("Port:    {}  {}".format(
+            CLR["red"] + "zu / nicht erreichbar" + RST,
+            CLR["dark"] + "(Daten vor {})".format(
+                human_age(time.time() - (th.get("ts") or 0))) + RST)))
+    if th.get("uptime"):
+        lines.append(mline("Uptime:  {} (Geraet an)".format(
+            human_age(th.get("uptime")))))
+
+    state = adb.get("state") or "disabled"
+    state_txt = {
+        "device": CLR["green"] + "verbunden" + RST,
+        "unauthorized": CLR["yellow"] + "Bestaetigung am TV noetig" + RST,
+        "offline": CLR["red"] + "offline" + RST,
+        "missing": CLR["yellow"] + "adb nicht installiert" + RST,
+        "disabled": CLR["gray"] + "aus" + RST,
+    }.get(state, CLR["gray"] + str(state) + RST)
+    lines.append(mline("ADB:     {}".format(state_txt)))
+
+    if state == "device":
+        thread = adb.get("thread") or "unknown"
+        if thread == "active":
+            tt = CLR["green"] + "aktiv (Border Router laeuft)" + RST
+        elif thread == "inactive":
+            tt = CLR["red"] + "INAKTIV" + RST
+        else:
+            tt = CLR["yellow"] + "unbekannt" + RST
+        lines.append(mline("Thread:  {}".format(tt)))
+        if adb.get("evidence"):
+            lines.append(mline(CLR["dark"] + clip(
+                "  " + adb["evidence"], mw - 4) + RST))
+    elif state == "unauthorized":
+        lines.append(mline(CLR["gray"] + "Am Fernseher 'USB-Debugging zulassen'" + RST))
+        lines.append(mline(CLR["gray"] + "einmal bestaetigen (Schluessel wird gemerkt)." + RST))
+
+    probes = adb.get("probes") or []
+    if probes:
+        lines.append(msep())
+        lines.append(mline(CLR["cyan"] + BOLD + "ADB-PROBEN" + RST))
+        for probe in probes[:2]:
+            rc = probe.get("rc")
+            cmd = clip(probe.get("cmd") or "?", mw - 8)
+            lines.append(mline("  {} {}".format(
+                (CLR["green"] + "\u2713" if rc == 0 else CLR["red"] + "\u2717") + RST,
+                cmd)))
+            body = (probe.get("out") or "").strip().splitlines()
+            for row in body[:3]:
+                lines.append(mline(CLR["dark"] + "    " + clip(row, mw - 10) + RST))
+            if len(body) > 3:
+                lines.append(mline(CLR["dark"] + "    \u2026 +{} Zeilen".format(
+                    len(body) - 3) + RST))
+
+    lines.append(msep())
+    lines.append(mline(CLR["gray"] + "Stand {}   [ESC]/[q] schliessen".format(
+        fmt_ts(th.get("ts"))) + RST))
+    lines.append(mbg + MBOX["bl"] + MBOX["h"] * (mw - 2) + MBOX["br"] + RST)
+    return lines
 
 
 def _hm_counts(hm):
@@ -2853,6 +3027,8 @@ def handle_input(data, active_panel, sel_dev, sel_guest, sel_ap, sel_dc,
             res["action"] = "fritz"
         elif c in ("m", "M"):
             res["action"] = "homematic"
+        elif c in ("t", "T"):
+            res["action"] = "thread"
         elif c in ("d", "D"):
             res["action"] = "delete_device"
         elif b == 0x20:
@@ -3209,6 +3385,7 @@ def main():
             uni = load(UNI)
             dc = load(DECONZ)
             hm = load(HOMEMATIC)
+            th = load(THREAD)
 
             dev_items = flat_devices(CFG)
             guest_items = flat_guests(prox)
@@ -3244,6 +3421,8 @@ def main():
                 modal["data"] = dc or modal.get("data")
             if modal and modal.get("type") == "homematic":
                 modal["data"] = hm or modal.get("data")
+            if modal and modal.get("type") == "thread":
+                modal["data"] = th or modal.get("data")
             if modal and modal.get("type") == "pve_node":
                 ni = modal.get("node_idx", 0)
                 nodes = (prox or {}).get("nodes") or []
@@ -3273,7 +3452,7 @@ def main():
 
             rows = render(w, h, state, prox, speed, uni, dc, frame,
                           active_panel, sel_dev, sel_guest, sel_ap, sel_dc,
-                          msg, modal, sel_node, sel_kind, fb=fb, hm=hm)
+                          msg, modal, sel_node, sel_kind, fb=fb, hm=hm, th=th)
             safe_write(ESC + "[H" + "\n".join(rows) + RST)
             frame += 1
 
@@ -3292,8 +3471,19 @@ def main():
 
             # Maus: Klick auf eine AP-Zeile oeffnet das Geraete-Modal
             m = MOUSE_RE.search(data)
+            closed_now = False
             if m:
-                if not modal:
+                if modal and m.group(4) == b"M" and int(m.group(1)) == 0:
+                    rect = LAST_LAYOUT.get("modal_rect")
+                    if rect:
+                        sx, sy, mw_box, mh_box = rect
+                        mx = int(m.group(2)) - 1
+                        my = int(m.group(3)) - 1
+                        if not (sy <= my < sy + mh_box
+                                and sx <= mx < sx + mw_box):
+                            modal = None
+                            closed_now = True
+                if not modal and not closed_now:
                     btn = int(m.group(1))
                     mx = int(m.group(2)) - 1
                     my = int(m.group(3)) - 1
@@ -3359,6 +3549,11 @@ def main():
                                 and x0 <= mx <= x1):
                             active_panel = 4
                             modal = open_homematic_modal(hm)
+                            hit = True
+                        if (not hit and th
+                                and LAST_LAYOUT.get("th_hit") == my
+                                and x0 <= mx <= x1):
+                            modal = open_thread_modal(th)
                 data = MOUSE_RE.sub(b"", data)
                 if not data:
                     continue
@@ -3516,6 +3711,8 @@ def main():
                 modal = {"type": "fritz", "data": fb}
             elif act == "homematic":
                 modal = open_homematic_modal(hm)
+            elif act == "thread":
+                modal = open_thread_modal(th)
             elif act == "delete_device" and active_panel == 0 and dev_items:
                 gid, lbl, d = dev_items[sel_dev]
                 modal = {

@@ -39,6 +39,8 @@ JOBS = (
      "default": 60, "phase": 44, "timeout": 30, "critical": False},
     {"name": "homematic", "script": "homematic.py", "key": "homematic_interval_sec",
      "default": 60, "phase": 36, "timeout": 30, "slow": 12, "critical": False},
+    {"name": "thread", "script": "thread.py", "key": "thread_interval_sec",
+     "default": 60, "phase": 52, "timeout": 45, "slow": 8, "critical": False},
     {"name": "speedtest", "script": "speedtest.py", "key": "speedtest_interval_min",
      "default": 30, "phase": 120, "timeout": 90, "critical": False,
      "factor": 60, "fritz_guard": True},

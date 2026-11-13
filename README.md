@@ -51,14 +51,15 @@ Nur **Python 3 stdlib + `fping`** — kein pip, kein venv, kein Framework.
 | `unifi.py`         | Fragt UniFi-Controller ab (APs, WLAN-Clients) → `unifi.json` |
 | `deconz.py`        | Fragt deCONZ/Phoscon ab (Lights, Sensoren) → `deconz.json`  |
 | `homematic.py`     | Fragt die HomeMatic-CCU über die XML-API ab → `homematic.json` |
+| `thread.py`        | Prüft Thread-Border-Router (Cast-Port, ADB-Status) → `thread.json` |
 | `fritzbox.py`      | Liest WAN-/Leitungsdaten per TR-064 von der FRITZ!Box → `fritzbox.json` |
 | `speedtest.py`     | Minimaler Down/Up-Speedtest (Fallback) → `speed.json`       |
-| `scheduler.py`     | Sequenzieller Poller: startet Ping/Proxmox/UniFi/deCONZ/HomeMatic/FRITZ!Box/Speedtest nacheinander |
+| `scheduler.py`     | Sequenzieller Poller: startet Ping/Proxmox/UniFi/deCONZ/HomeMatic/Thread/FRITZ!Box/Speedtest nacheinander |
 | `checker_loop.sh`  | Dünne Hülle für den systemd-Dienst `netbook-checker` → `scheduler.py` |
 | `boot_notify.py`   | Meldet nach dem Boot per ntfy, sobald Dashboard + Internet laufen |
 | `notify.py`        | ntfy-Versand (Topic aus `config.json`)                      |
 | `bin/dashboard`    | Shell-Befehl `dashboard` zum Starten der TUI                |
-| `config.json`      | Geräteliste + Proxmox-/UniFi-/deCONZ-/FRITZ!Box-Zugangsdaten + Intervalle (**nicht im Repo**) |
+| `config.json`      | Geräteliste + Proxmox-/UniFi-/deCONZ-/HomeMatic-/Thread-/FRITZ!Box-Zugangsdaten + Intervalle (**nicht im Repo**) |
 
 ## Steuerung
 
@@ -67,8 +68,9 @@ Nur **Python 3 stdlib + `fping`** — kein pip, kein venv, kein Framework.
 | `Tab`                | Panel wechseln (**Geraete** → **Proxmox** → **UniFi** → **deCONZ** → **HomeMatic**) |
 | `↑`/`↓`/`←`/`→`, `j`/`k`/`h`/`l` | **Frei räumlich** zum nächsten Element in der Richtung (Geräte-Subspalten, Proxmox-Nodes/Guests, APs, deCONZ, HomeMatic) |
 | `Enter`              | **Lightbox-Modal oeffnen** (Aktionen & Details)       |
-| Mausklick            | Auf eine Gerätezeile: **Geräte-Modal** (wie `Enter`); auf eine AP-Zeile: **Geraete dieses APs**; auf den deCONZ-Block: **Typ-/Akku-Übersicht**; auf den HomeMatic-Block: **Akku-/Funk-Details**; auf Node/Gast: **Server-/Gast-Modal**; auf die Statuszeile: **FRITZ!Box-Modal** |
+| Mausklick            | Auf eine Gerätezeile: **Geräte-Modal** (wie `Enter`); auf eine AP-Zeile: **Geraete dieses APs**; auf den deCONZ-Block: **Typ-/Akku-Übersicht**; auf den HomeMatic-Block: **Akku-/Funk-Details**; auf den Thread-Block: **Border-Router-Details**; auf Node/Gast: **Server-/Gast-Modal**; auf die Statuszeile: **FRITZ!Box-Modal** |
 | `m`                  | **HomeMatic-Modal** (live, Akku leer/schwach, Funk schlecht) |
+| `t`                  | **Thread-Border-Router-Modal** (Port, Uptime, ADB-/Thread-Status) |
 | `a`                  | **Geraet anlegen** (Name, IP/Host, optional HTTP-Port, Gruppe) |
 | `e`                  | Im Geräte-Modal: **Geraet bearbeiten** (Name, IP/Host, HTTP-Port, Gruppe) |
 | `Space`              | **Geraet pausieren / wieder aktivieren** (kein Ping, zaehlt nicht mit) |
@@ -83,6 +85,10 @@ Nur **Python 3 stdlib + `fping`** — kein pip, kein venv, kein Framework.
 | `r` / `p`            | Ping-Check bzw. Proxmox-Status sofort aktualisieren   |
 
 ### Lightbox Modals
+
+- **Schliessen:** `q` / `ESC` – oder mit der Maus **irgendwo ausserhalb** des
+  Modals klicken. Ein Klick innerhalb bleibt ohne Wirkung (nur die dort
+  angebotenen Tasten/Zeilen reagieren).
 
 - **Proxmox Server Modal (`Enter` auf dem Node-Kopf `⬤ Proxmox 1/2`)**:
   Zeigt Node-Name, Uptime, CPU-/RAM-/Disk-Auslastung und die Anzahl laufender
@@ -120,6 +126,11 @@ Nur **Python 3 stdlib + `fping`** — kein pip, kein venv, kein Framework.
   Traffic seit Neustart und die Sync-Gruppe (z. B. `sync_cable`).
   - `[q]` / `[ESC]` Schliessen
 
+- **Thread-Border-Router-Modal (`t` oder Klick auf den Thread-Block)**:
+  Zeigt Adresse/Port, TCP-Status, Uptime und den ADB-/Thread-Zustand inkl. der
+  letzten Probe-Ausgaben (Details siehe unten).
+  - `[q]` / `[ESC]` Schliessen
+
 ## Geraeteverwaltung (direkt im Dashboard)
 
 - `a` oeffnet ein Formular (Name, IP/Host, HTTP-Port optional, Gruppe per `<` / `>`).
@@ -150,6 +161,7 @@ In `config.json` (oder bequem per `c` im Dashboard):
 | `unifi_interval_sec` | 60 | Sekunden zwischen UniFi-Abfragen (APs, WLAN-Clients) |
 | `deconz_interval_sec` | 60 | Sekunden zwischen deCONZ-Abfragen (Lights, Sensoren) |
 | `homematic_interval_sec` | 60 | Sekunden zwischen HomeMatic-CCU-Abfragen (XML-API) |
+| `thread_interval_sec` | 60 | Sekunden zwischen Thread-Border-Router-Checks (Port + ADB) |
 | `fping_timeout` | 800 | ms pro Host |
 | `offline_after` | 3 | Fehlversuche in Folge, bis „Internet offline“ gilt |
 | `online_after` | 2 | Erfolge in Folge, bis „wieder online“ gilt |
@@ -165,8 +177,8 @@ kam die Zero 2 W schnell an ihre Grenzen. `scheduler.py` arbeitet deshalb so:
 
 - **immer nur ein Kindprozess** — keine parallelen HTTP-/SSH-Abfragen
 - **feste Reihenfolge/Priorität**: `checker` → `proxmox` → `fritzbox` →
-  `unifi` → `deconz` → `homematic` → `speedtest`
-- **Phasenversatz** je Job (0/4/12/28/44 s), damit die Abfragen nicht bündeln
+  `unifi` → `deconz` → `homematic` → `thread` → `speedtest`
+- **Phasenversatz** je Job (0/4/12/28/36/44/52 s), damit die Abfragen nicht bündeln
 - **Timeout** pro Job (30–90 s); ein hängender Job blockiert die anderen nicht
 - **Backoff** bei Fehlern: 2×, 4×, maximal 4× Intervall
 - **`nice`** für Scheduler und Kinder, dazu ein **Lastschutz**: ist der
@@ -589,6 +601,108 @@ Interface) und `statelist.cgi` (Zustände). Zugang in `config.json`
 
 Die Abfrage ist mit ~430 KB nicht ganz klein; der Job läuft deshalb nur alle
 60 s und braucht auf der Zero 2 W etwa 5 s (davon < 1 s CPU).
+
+## Thread-Border-Router-Block
+
+Ganz unten im rechten Panel (unter HomeMatic, durch eine Leerzeile abgesetzt)
+steht der Thread-Border-Router – hier der Google-TV-Streamer, der nebenbei ein
+Thread-/Matter-Border-Router ist:
+
+```
+⌁ Thread-BR 192.168.178.197:8008 ok · BR aktiv · up 3h12
+```
+
+Der Block beantwortet zwei getrennte Fragen:
+
+1. **Ist der Streamer ueberhaupt an?** → TCP-Connect auf den Cast-Port 8008
+   (plus `/setup/eureka_info` fuer Name und Uptime). Das ist der harte,
+   sekundenschnelle Check. Achtung: 8008 antwortet auch im Standby – „Port
+   offen“ heisst nur „Geraet laeuft“, nicht „Thread-Router laeuft“.
+2. **Laeuft das Thread-Netz noch?** → nur per **ADB** lesbar (siehe unten).
+
+Farben/Anzeige:
+
+| Fall | Anzeige |
+|------|---------|
+| Port offen, Thread aktiv | gruen, `BR aktiv` |
+| Port offen, Thread nachweislich aus | rot, `BR INAKTIV` |
+| Port offen, ADB wartet auf Freigabe | gelb, `ADB bestaetigen` |
+| Port offen, kein `adb` installiert | gelb, `ADB fehlt` |
+| Port offen, ADB da, aber kein Thread-Status erkennbar | gelb, `Thread unbekannt` |
+| Port offen, ADB abgeschaltet | gelb, `nur Port` |
+| Port zu | rot, `Thread-BR <host>:<port> offline (vor 5m)` |
+
+Bei schmalen Terminals wird gekuerzt (`⌁ Thread <host>:<port> · <Status>`,
+zuletzt `⌁ T8008 · <Status>`). **Klick auf den Block** oder Taste `t` oeffnet
+das Detail-Modal; dort stehen Port/RTT, Uptime, ADB-Zustand, der erkannte
+Thread-Status und die Roh-Ausgaben der ADB-Proben.
+
+### Warum Thread nicht einfach per Port zu pruefen ist
+
+Thread ist ein **802.15.4-Funknetz** mit eigenem Interface (`thread-wpan`), kein
+IP-Netz im LAN. Ein Port-Ping am Streamer kann deshalb immer nur das Geraet
+treffen, nie den Thread-Teil:
+
+| Was | Port | im LAN pruefbar? |
+|-----|------|------------------|
+| Matter operational | UDP 5540 | nur an der IPv6 des Thread-Geraets; der Streamer routet das Thread-Praefix nicht ins LAN |
+| Thread Border Agent | `_meshcop._udp`, dynamisch | laut Spec ja – **Google annonciert es nicht** (hier gemessen: 0 Antworten) |
+| TREL (BR ↔ BR) | `_trel._udp`, dynamisch | nur mit mehreren Border-Routern relevant |
+| MLE / Thread-Management | UDP 19788 / 61631 | nur innerhalb des Mesh (Funk) |
+
+Auch `eureka_info` liefert nur `uptime`/`connected`, keinen Thread-Status.
+Der einzige Weg an den echten Zustand ist ADB auf dem Streamer.
+
+### ADB (optional, aber der eigentliche BR-Check)
+
+Einmalig am Fernseher **„USB-Debugging zulassen“** bestaetigen, danach merkt
+sich der Streamer den Schluessel. Auf der Zero 2 W:
+
+```bash
+sudo apt-get install -y adb
+adb connect 192.168.178.197:5555    # -> device
+adb shell dumpsys connectivity | head
+```
+
+Ohne Freigabe steht dort `unauthorized`; das Dashboard zeigt dann gelb
+`ADB bestaetigen` und im Modal den Hinweis. `thread.py` fuehrt die Proben aus
+`adb_commands` aus (Standard: `dumpsys thread_network`, `dumpsys threadnetwork`,
+`ip -6 addr show dev thread-wpan`, `dumpsys connectivity`,
+`getprop | grep -i thread`) und leitet daraus ab:
+
+- `enabled: true/false` bzw. Zustandsworte (`active`, `leader`, `router`, …)
+  → **aktiv**
+- `disabled`/`inactive`/`stopped`, kein `thread-wpan` → **inaktiv**
+- globale `fd…`-Adresse am `thread-wpan` → **aktiv**
+- sonst **unbekannt** (dann wird nichts gemeldet)
+
+Bei einem Wechsel von `aktiv` nach `inaktiv` bzw. wenn der Port zufaellt, geht
+eine ntfy-Meldung raus; beim Zurueckschalten kommt eine Entwarnung (kein Alarm
+beim ersten Lauf). Ergebnis liegt in `thread.json`.
+
+Zugang in `config.json` (Modus 600, **nicht ins Repo**):
+
+```json
+"thread_interval_sec": 60,
+"thread": {
+  "enabled": true,
+  "host": "192.168.178.197",
+  "port": 8008,
+  "name": "Chromecast 4k",
+  "timeout": 3,
+  "adb": true,
+  "adb_port": 5555,
+  "adb_timeout": 6,
+  "adb_commands": ["dumpsys thread_network", "dumpsys threadnetwork",
+                   "ip -6 addr show dev thread-wpan", "dumpsys connectivity",
+                   "getprop | grep -i thread"],
+  "notify": true
+}
+```
+
+`"adb": false` schaltet die Proben ab (dann bleibt nur der Port-Check).
+Der Job laeuft im Scheduler alle 60 s; ein `adb connect` kostet nur dann Zeit,
+wenn ADB aktiviert ist.
 
 ## Statusdauer
 

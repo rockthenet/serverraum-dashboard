@@ -6,6 +6,7 @@
   "fritzbox_interval_sec": 60,
   "proxmox_interval_sec": 30,
   "homematic_interval_sec": 60,
+  "thread_interval_sec": 60,
   "offline_after": 3,
   "online_after": 2,
   "groups": {
@@ -354,5 +355,23 @@
     "user": "fritz3219",
     "password": "DEIN-FRITZBOX-PASSWORT",
     "timeout": 8
+  },
+  "thread": {
+    "enabled": true,
+    "host": "192.168.178.197",
+    "port": 8008,
+    "name": "Chromecast 4k",
+    "timeout": 3,
+    "adb": true,
+    "adb_port": 5555,
+    "adb_timeout": 6,
+    "adb_commands": [
+      "dumpsys thread_network",
+      "dumpsys threadnetwork",
+      "ip -6 addr show dev thread-wpan",
+      "dumpsys connectivity",
+      "getprop | grep -i thread"
+    ],
+    "notify": true
   }
 }
