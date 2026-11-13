@@ -25,6 +25,7 @@ import ssl
 import subprocess
 import sys
 import termios
+import threading
 import time
 import tty
 import urllib.error
@@ -246,6 +247,102 @@ def _write_registry(fd, entries):
         pass
 
 
+def _who_sessions():
+    """tty -> (nutzer, host) aus `who`; nur fuer die Sitzungs-Meldung."""
+    out = {}
+    try:
+        res = subprocess.run(["who"], stdout=subprocess.PIPE,
+                             stderr=subprocess.DEVNULL, timeout=3)
+        text = res.stdout.decode("utf-8", "replace")
+    except Exception:
+        return out
+    for line in text.splitlines():
+        parts = line.split()
+        if len(parts) < 2:
+            continue
+        user = parts[0]
+        # Die Spalte "line" kann Zusatzwoerter enthalten (z.B. "sshd pts/0"),
+        # daher das eigentliche TTY heraussuchen.
+        tty = ""
+        for part in parts[1:]:
+            cand = part.replace("/dev/", "")
+            if re.match(r"^(pts/\d+|tty\w*|seat\w*)$", cand):
+                tty = cand
+                break
+        if not tty:
+            continue
+        host = ""
+        m = re.search(r"\(([^)]*)\)", " ".join(parts[2:]))
+        if m:
+            host = m.group(1).strip()
+        out[tty] = (user, host)
+    return out
+
+
+def _proc_session(pid):
+    """(nutzer, client-ip) einer laufenden Instanz aus /proc/<pid>/environ."""
+    user = host = ""
+    try:
+        with open("/proc/{}/environ".format(int(pid)), "rb") as f:
+            raw = f.read()
+    except Exception:
+        return user, host
+    env = {}
+    for item in raw.split(b"\0"):
+        if b"=" in item:
+            k, v = item.split(b"=", 1)
+            env[k.decode("utf-8", "replace")] = v.decode("utf-8", "replace")
+    user = env.get("LOGNAME") or env.get("USER") or ""
+    conn = env.get("SSH_CONNECTION") or ""
+    host = conn.split()[0] if conn.split() else ""
+    return user, host
+
+
+def _session_label(tty, sessions):
+    """Lesbare Kennung 'nutzer von host (tty)' fuer eine Sitzung."""
+    key = (tty or "").replace("/dev/", "")
+    user, host = (sessions or {}).get(key, ("unbekannt", ""))
+    label = user
+    if host:
+        label += " von " + host
+    if key and key != "-":
+        label += " ({})".format(key)
+    return label
+
+
+def _notify_session_swap(old_tty, new_tty, old_proc=None, new_proc=None):
+    """ntfy-Meldung, wenn eine externe Dashboard-Sitzung verdraengt wurde."""
+    sessions = _who_sessions()
+
+    def label(tty, proc):
+        user, host = proc or ("", "")
+        if user or host:
+            return "{} von {} ({})".format(user or "unbekannt",
+                                            host or "unbekannt",
+                                            (tty or "-").replace("/dev/", ""))
+        return _session_label(tty, sessions)
+
+    old = label(old_tty, old_proc)
+    new = label(new_tty, new_proc)
+
+    def work():
+        try:
+            import notify
+            notify.send(
+                "Neue Dashboard-Sitzung: {}\nVerdraengt: {}".format(new, old),
+                title="Serverraum-Dashboard: Sitzungswechsel",
+                tags="warning")
+        except Exception:
+            pass
+
+    try:
+        t = threading.Thread(target=work)
+        t.daemon = True
+        t.start()
+    except Exception:
+        pass
+
+
 def _acquire_instance_lock():
     """Bis zu zwei Dashboards: der Kiosk auf tty1 und eine externe Sitzung.
 
@@ -288,12 +385,17 @@ def _acquire_instance_lock():
                    if p != os.getpid() and _pid_alive(p)]
         keep = []
         kill = []
+        swapped = []
         for pid, etty, erole in entries:
             if role == erole:
                 # gleiche Art: die neue Instanz verdraengt die alte
                 kill.append(pid)
+                if role == "e":
+                    swapped.append((pid, etty))
             else:
                 keep.append((pid, etty, erole))
+        old_proc = _proc_session(swapped[0][0]) if swapped else None
+        new_proc = _proc_session(os.getpid()) if swapped else None
         for pid in kill:
             try:
                 os.kill(pid, signal.SIGTERM)
@@ -311,6 +413,8 @@ def _acquire_instance_lock():
             return None, " ".join(str(p) for p in remaining)
         _write_registry(fd, keep + [(os.getpid(), tty, role)])
         fcntl.flock(fd, fcntl.LOCK_UN)
+        if swapped:
+            _notify_session_swap(swapped[0][1], tty, old_proc, new_proc)
         return fd, ""
     except Exception:
         try:
@@ -880,6 +984,7 @@ def build_device_modal(modal, mw):
 
     lines.append(msep())
     lines.append(mline(CLR["cyan"] + BOLD + "AKTIONEN:" + RST))
+    lines.append(mline("  " + CLR["cyan"] + "[e] Bearbeiten (Name, IP, Port, Gruppe)" + RST))
     lines.append(mline("  " + CLR["cyan"] + "[r] Ping jetzt wiederholen" + RST))
     lines.append(mline("  " + CLR["yellow"] + "[n] Meldung: aus / down / up / beides" + RST))
     if paused:
@@ -1287,7 +1392,7 @@ def render(w, h, state, prox, speed, uni, dc, frame, active_panel,
     if rest > 0:
         reserve = 0
         if dc:
-            reserve += 2          # Leerzeile + deCONZ-Zeile
+            reserve += 3          # Leerzeile + deCONZ-Block (2 Zeilen)
         if hm:
             reserve += 3          # Leerzeile + HomeMatic-Block (2 Zeilen)
         if reserve >= rest:
@@ -1362,6 +1467,9 @@ def render(w, h, state, prox, speed, uni, dc, frame, active_panel,
         "hm_hit": ((3 + len(prox_lines) + uni_len + dc_off + dc_len
                     + hm_off + hm_hits[0]) if hm_hits else None),
         "items": items,
+        "dev_hits": [(3 + r, 1 + ci * (cw_dev + 1),
+                      1 + ci * (cw_dev + 1) + cw_dev - 1, di)
+                     for r, di, ci in dev_hits if r < body_h],
         "fritz_hit": 1 if (fb and fb.get("ok")) else None,
         "x0": LW + 2,
         "x1": LW + 2 + RW - 1,
@@ -1443,6 +1551,22 @@ def render(w, h, state, prox, speed, uni, dc, frame, active_panel,
                 rows[y] = splice_row(rows[y], mline, sx, mw)
 
     return rows
+
+
+def open_device_modal(dev_items, state, idx):
+    """Geraete-Modal fuer einen Eintrag der linken Liste (Tastatur/Maus)."""
+    if not (0 <= idx < len(dev_items)):
+        return None
+    gid, lbl, d = dev_items[idx]
+    st = ((state or {}).get("devices") or {}).get("{}|{}".format(gid, d["name"]))
+    return {
+        "type": "device",
+        "dev": d,
+        "gid": gid,
+        "label": lbl,
+        "state": st,
+        "result": None,
+    }
 
 
 def build_device_lines(devs, state, w, sel_dev, hit_rows=None):
@@ -1771,10 +1895,12 @@ def _deconz_counts(dc):
 
 
 def build_deconz_lines(dc, w, max_lines, sel=False, hit_rows=None):
-    """Kompakter deCONZ-Block: im Hauptbildschirm nur die Anzahl."""
+    """Kompakter deCONZ-Block: Anzahl, Akku- und Funk-Auffaelligkeiten."""
     out = []
     if not dc:
         out.append(CLR["dark"] + " \u2b21 deCONZ: keine Daten" + RST)
+        if hit_rows is not None:
+            hit_rows.append(0)
         return out
 
     total, online, offline = _deconz_counts(dc)
@@ -1782,20 +1908,81 @@ def build_deconz_lines(dc, w, max_lines, sel=False, hit_rows=None):
         age = human_age(time.time() - (dc.get("ts") or 0))
         line = (CLR["red"] + " \u2b21 deCONZ  nicht erreichbar" + RST
                 + CLR["dark"] + " (Daten vor {})".format(age) + RST)
+        if sel:
+            line = hl(line, w)
+        if hit_rows is not None:
+            hit_rows.append(0)
+        out.append(line)
+        return out[:max_lines] if max_lines is not None else out
+
+    bat_weak = int(dc.get("battery_weak") or 0)
+    bat_empty = int(dc.get("battery_empty") or 0)
+    # Leere Akkus nicht doppelt als "schwach" zaehlen.
+    weak = max(0, bat_weak - bat_empty)
+    # deCONZ liefert keinen RSSI/LQI; nicht erreichbar = schlechte Funkstrecke.
+    bad = offline
+
+    if total and offline == 0:
+        hc = CLR["green"]
+    elif online:
+        hc = CLR["yellow"]
     else:
-        if total and offline == 0:
-            hc = CLR["green"]
-        elif online:
-            hc = CLR["yellow"]
-        else:
-            hc = CLR["red"]
-        line = "{}\u2b21 {}{}deCONZ{}  {} Geraete".format(
-            hc, BOLD, hc, RST, total)
+        hc = CLR["red"]
+
+    if max_lines is not None and max_lines < 2:
+        # Nur eine Zeile Platz: alles in eine kompakte Zusammenfassung.
+        variants = [
+            "deCONZ {} \u00b7 {} live \u00b7 Akku {} \u00b7 Funk {}".format(
+                total, online, bat_empty, bad),
+            "deCONZ {} \u00b7 {} live \u00b7 A{} \u00b7 F{}".format(
+                total, online, bat_empty, bad),
+            "dC{} {}live A{} F{}".format(total, online, bat_empty, bad),
+        ]
+        text = variants[-1]
+        for cand in variants:
+            if vlen(cand) + 2 <= w:
+                text = cand
+                break
+        line1 = "{}\u2b21 {}{}".format(hc, text, RST)
+        if sel:
+            line1 = hl(line1, w)
+        if hit_rows is not None:
+            hit_rows.append(0)
+        return [clip(line1, w) if vlen(line1) > w else line1]
+
+    if w >= 40:
+        line1 = "{}\u2b21 {}{}deCONZ{}  {} Geraete  {} live".format(
+            hc, BOLD, hc, RST, total, online)
+    else:
+        line1 = "{}\u2b21 deCONZ {} \u00b7 {} live{}".format(
+            hc, total, online, RST)
     if sel:
-        line = hl(line, w)
+        line1 = hl(line1, w)
     if hit_rows is not None:
         hit_rows.append(0)
-    out.append(line)
+    out.append(line1)
+
+    def _num(value, color):
+        return color + str(value) + RST
+
+    if w >= 40:
+        line2 = "  Akku {} leer / {} schwach \u00b7 Funk {} schlecht{}".format(
+            _num(bat_empty, CLR["red"] if bat_empty else CLR["green"]),
+            _num(weak, CLR["yellow"] if weak else CLR["green"]),
+            _num(bad, CLR["red"] if bad else CLR["green"]),
+            RST)
+    elif w >= 24:
+        line2 = "  {} leer \u00b7 {} schwach \u00b7 {} schlecht{}".format(
+            _num(bat_empty, CLR["red"] if bat_empty else CLR["green"]),
+            _num(weak, CLR["yellow"] if weak else CLR["green"]),
+            _num(bad, CLR["red"] if bad else CLR["green"]),
+            RST)
+    else:
+        line2 = "  A{}/{}  F{}{}".format(
+            _num(bat_empty, CLR["red"] if bat_empty else CLR["green"]),
+            _num(weak, CLR["yellow"] if weak else CLR["green"]),
+            _num(bad, CLR["red"] if bad else CLR["green"]), RST)
+    out.append(clip(line2, w) if vlen(line2) > w else line2)
     return out[:max_lines] if max_lines is not None else out
 
 
@@ -2610,7 +2797,9 @@ def handle_input(data, active_panel, sel_dev, sel_guest, sel_ap, sel_dc,
                 elif c == "4": res["modal_action"] = "stop"
                 elif c == "5": res["modal_action"] = "backup"
             elif modal["type"] == "device":
-                if c in ("r", "R"):
+                if c in ("e", "E"):
+                    res["modal_action"] = "edit"
+                elif c in ("r", "R"):
                     res["modal_action"] = "ping"
                 elif c in ("d", "D"):
                     res["modal_action"] = "delete"
@@ -2740,6 +2929,40 @@ def open_add_form(default_gid=None):
     }
 
 
+def open_edit_form(gid, name):
+    """Bestehendes Geraet bearbeiten (Name, IP, HTTP-Port, Gruppe)."""
+    dev = find_device(gid, name)
+    if not dev:
+        return None
+    choices = group_choices() or [("eigene", "Eigene")]
+    idx = 0
+    for n, (g, _lbl) in enumerate(choices):
+        if g == gid:
+            idx = n
+            break
+    port = dev.get("http") or dev.get("port") or ""
+    return {
+        "type": "form",
+        "kind": "edit",
+        "title": "GERAET BEARBEITEN",
+        "orig_gid": gid,
+        "orig_name": name,
+        "focus": 0,
+        "error": None,
+        "fields": [
+            {"key": "name", "label": "Name", "type": "text",
+             "value": name, "max": 30},
+            {"key": "ip", "label": "IP/Host", "type": "text",
+             "value": dev.get("ip", ""), "max": 40},
+            {"key": "port", "label": "HTTP-Port", "type": "text",
+             "value": str(port), "max": 5},
+            {"key": "group", "label": "Gruppe", "type": "select",
+             "value": choices[idx][1], "idx": idx, "options": choices},
+        ],
+        "hint": "Enter speichert | HTTP-Port optional (nur fuer Web-Check)",
+    }
+
+
 def open_config_form():
     return {
         "type": "form",
@@ -2797,6 +3020,46 @@ def apply_form(modal):
         save_config(CFG)
         run_checker_now()
         return None, "{} angelegt ({})".format(name, gid)
+
+    if modal.get("kind") == "edit":
+        orig_gid = modal.get("orig_gid")
+        orig_name = modal.get("orig_name")
+        dev = find_device(orig_gid, orig_name)
+        if not dev:
+            return "Geraet nicht mehr vorhanden", None
+        name = vals.get("name", "")
+        ip = vals.get("ip", "")
+        port = vals.get("port", "")
+        if not name:
+            return "Name fehlt", None
+        if not valid_host(ip):
+            return "IP/Hostname ungueltig", None
+        if port and not port.isdigit():
+            return "HTTP-Port muss eine Zahl sein", None
+        sel = next((f for f in modal["fields"] if f["key"] == "group"), None)
+        if sel and sel.get("options"):
+            gid = sel["options"][sel.get("idx", 0)][0]
+        else:
+            gid = orig_gid
+        if (gid != orig_gid or name != orig_name) and find_device(gid, name):
+            return "Name existiert in dieser Gruppe", None
+        dev["name"] = name
+        dev["ip"] = ip
+        if port:
+            dev["http"] = int(port)
+        else:
+            dev.pop("http", None)
+            dev.pop("port", None)
+        if gid != orig_gid:
+            old = CFG.get("groups", {}).get(orig_gid, {})
+            if dev in (old.get("devices") or []):
+                old["devices"].remove(dev)
+            grp = CFG.setdefault("groups", {}).setdefault(
+                gid, {"label": gid.replace("_", " ").title(), "devices": []})
+            grp.setdefault("devices", []).append(dev)
+        save_config(CFG)
+        run_checker_now()
+        return None, "{} gespeichert ({})".format(name, ip)
 
     if modal.get("kind") == "config":
         try:
@@ -3036,6 +3299,15 @@ def main():
                     kind = m.group(4)
                     if kind == b"M" and btn == 0:
                         hit = False
+                        for yy, dx0, dx1, di in LAST_LAYOUT.get("dev_hits", []):
+                            if yy == my and dx0 <= mx <= dx1:
+                                m_dev = open_device_modal(dev_items, state, di)
+                                if m_dev:
+                                    active_panel = 0
+                                    sel_dev = di
+                                    modal = m_dev
+                                    hit = True
+                                break
                         if my == LAST_LAYOUT.get("fritz_hit"):
                             modal = {"type": "fritz", "data": fb}
                             hit = True
@@ -3128,16 +3400,7 @@ def main():
                         "result": None,
                     }
                 elif active_panel == 0 and dev_items:
-                    gid, lbl, d = dev_items[sel_dev]
-                    st = (state or {}).get("devices", {}).get("{}|{}".format(gid, d["name"]))
-                    modal = {
-                        "type": "device",
-                        "dev": d,
-                        "gid": gid,
-                        "label": lbl,
-                        "state": st,
-                        "result": None,
-                    }
+                    modal = open_device_modal(dev_items, state, sel_dev)
 
             # Formular abbrechen
             if inp["form_cancel"]:
@@ -3196,6 +3459,10 @@ def main():
                                 stderr=subprocess.DEVNULL)
                     elif mact == "cancel_node":
                         modal["pending"] = None
+                elif modal["type"] == "device" and mact == "edit":
+                    form = open_edit_form(modal["gid"], modal["dev"]["name"])
+                    if form:
+                        modal = form
                 elif modal["type"] == "device" and mact == "ping":
                     subprocess.Popen([sys.executable, os.path.join(HERE, "checker.py")],
                                      stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)

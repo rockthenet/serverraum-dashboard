@@ -24,8 +24,8 @@ Zeigt in einem mehrspaltigen ASCII-Layout:
   nach Problemgruppe und Gerätetyp
 - **Freie Pfeilnavigation**: ↑/↓/←/→ springen räumlich zum nächsten Element
   (Geräte-Subspalten, Proxmox-Guests, APs, deCONZ)
-- **Verwaltung im TUI**: Geräte anlegen / pausieren / löschen, Intervalle
-  für Ping und Speedtest einstellen, Statusdauer je Gerät
+- **Verwaltung im TUI**: Geräte anlegen / bearbeiten / pausieren / löschen,
+  Intervalle für Ping und Speedtest einstellen, Statusdauer je Gerät
 - **ntfy-Meldungen pro Gerät**: auf Wunsch bei DOWN, UP oder beidem
 - **Uptime**, **CPU-** und **RAM-Auslastung** des Dashboards-Rechners in der Titelzeile
 
@@ -67,9 +67,10 @@ Nur **Python 3 stdlib + `fping`** — kein pip, kein venv, kein Framework.
 | `Tab`                | Panel wechseln (**Geraete** → **Proxmox** → **UniFi** → **deCONZ** → **HomeMatic**) |
 | `↑`/`↓`/`←`/`→`, `j`/`k`/`h`/`l` | **Frei räumlich** zum nächsten Element in der Richtung (Geräte-Subspalten, Proxmox-Nodes/Guests, APs, deCONZ, HomeMatic) |
 | `Enter`              | **Lightbox-Modal oeffnen** (Aktionen & Details)       |
-| Mausklick            | Auf eine AP-Zeile: **Geraete dieses APs**; auf den deCONZ-Block: **Typ-/Akku-Übersicht**; auf den HomeMatic-Block: **Akku-/Funk-Details**; auf Node/Gast: **Server-/Gast-Modal**; auf die Statuszeile: **FRITZ!Box-Modal** |
+| Mausklick            | Auf eine Gerätezeile: **Geräte-Modal** (wie `Enter`); auf eine AP-Zeile: **Geraete dieses APs**; auf den deCONZ-Block: **Typ-/Akku-Übersicht**; auf den HomeMatic-Block: **Akku-/Funk-Details**; auf Node/Gast: **Server-/Gast-Modal**; auf die Statuszeile: **FRITZ!Box-Modal** |
 | `m`                  | **HomeMatic-Modal** (live, Akku leer/schwach, Funk schlecht) |
 | `a`                  | **Geraet anlegen** (Name, IP/Host, optional HTTP-Port, Gruppe) |
+| `e`                  | Im Geräte-Modal: **Geraet bearbeiten** (Name, IP/Host, HTTP-Port, Gruppe) |
 | `Space`              | **Geraet pausieren / wieder aktivieren** (kein Ping, zaehlt nicht mit) |
 | `d`                  | **Geraet loeschen** (mit Rueckfrage)                  |
 | `c`                  | **Intervalle + Meldungen einstellen** (Ping, Speedtest, Offline/Online ab) |
@@ -104,6 +105,7 @@ Nur **Python 3 stdlib + `fping`** — kein pip, kein venv, kein Framework.
 
 - **Geraete Modal (`Enter`)**:
   Zeigt IP, Gruppe, Typ, Ping-RTT und HTTP-Port-Status.
+  - `[e]` Geraet bearbeiten (Name, IP/Host, HTTP-Port, Gruppe)
   - `[r]` Ping sofort wiederholen
   - `[q]` / `[ESC]` Schliessen
 
@@ -122,6 +124,11 @@ Nur **Python 3 stdlib + `fping`** — kein pip, kein venv, kein Framework.
 
 - `a` oeffnet ein Formular (Name, IP/Host, HTTP-Port optional, Gruppe per `<` / `>`).
   Gespeichert wird direkt in `config.json`, der Checker laeuft sofort.
+- `e` im Geraete-Modal bearbeitet den Eintrag: Name, IP/Host, HTTP-Port und
+  Gruppe lassen sich korrigieren, z. B. eine falsch eingetragene IP. Ein
+  Gruppenwechsel verschiebt das Geraet, der Checker laeuft sofort.
+- Klick mit der Maus auf eine Geraetezeile oeffnet dasselbe Modal wie `Enter`
+  (praktisch auf dem Handy mit Shell-App, ohne Pfeiltasten).
 - `Space` pausiert das gewaehlte Geraet: kein Ping mehr, zaehlt nicht in
   online/total und erscheint als `PAUSE` (Header: `⏸N`). Erneutes `Space`
   aktiviert es wieder.
@@ -289,6 +296,9 @@ physischen Bildschirm (`/dev/tty1`) und **eine** Sitzung über SSH.
 
 - eine **neue Shell-Sitzung** beendet die vorherige Shell-Sitzung
   (`SIGTERM`, sauberes Aufräumen des Terminals); der Kiosk läuft weiter
+- dabei geht eine **ntfy-Meldung** raus, wer die Sitzung übernommen hat und
+  wer verdrängt wurde – mit Benutzername und IP (aus `who` bzw.
+  `SSH_CONNECTION`): `Neue Dashboard-Sitzung: … / Verdraengt: …`
 - der **Kiosk** wird von einer Shell-Sitzung nie beendet
 - ein **Kiosk-Neustart** ersetzt nur einen alten Kiosk-Prozess, nie die
   externe Sitzung
@@ -426,14 +436,20 @@ automatisch `/api/auth/login` + `/proxy/network` verwendet. Abgefragt werden
 ## deCONZ-Block
 
 Unter dem UniFi-Block steht – durch eine Leerzeile abgesetzt – ein kompakter
-deCONZ-/Phoscon-Block. Im Hauptbildschirm zeigt er **nur die Anzahl** der
-physischen Zigbee-Geräte (konsolidiert, siehe unten):
+deCONZ-/Phoscon-Block. Im Hauptbildschirm zeigt er die Anzahl der physischen
+Zigbee-Geräte (konsolidiert, siehe unten) und darunter dieselbe Art
+Akku-/Funk-Zeile wie HomeMatic:
 
 ```
-⬡ deCONZ  73 Geraete
+⬡ deCONZ  73 Geraete  63 live
+  Akku 0 leer / 3 schwach · Funk 10 schlecht
 ```
 
+- `Akku leer` = 0 %, `Akku schwach` = ≤ 25 % (leere Akkus zählen dort nicht
+  doppelt), `Funk schlecht` = Gerät von deCONZ als **nicht erreichbar**
+  gemeldet (deCONZ liefert keinen RSSI/LQI)
 - Farbe: grün = alle verbunden, gelb = einzelne offline, rot = keine Verbindung
+- bei sehr schmalen Terminals rückt alles in eine Zeile (`A0/3 F10`)
 - **Klick auf den Block** (oder `Tab` bis `PROXMOX + UNIFI`, dann `↓` bis
   deCONZ und `Enter`) öffnet die Detailübersicht
 - Ist das Gateway nicht erreichbar, bleiben die letzten Zahlen sichtbar
