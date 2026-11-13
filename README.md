@@ -198,12 +198,12 @@ optional einen **ntfy-Token**:
 ╔══════════════════════════════════════════════════════════════╗
 ║ INTERVALLE, NTFY & MELDUNGEN                                 ║
 ╠══════════════════════════════════════════════════════════════╣
-║  Ping (s):  15                                              ║
-║  Speed (min):30                                             ║
-║  Offline ab:3                                               ║
-║  Online ab: 2                                               ║
-║  ntfy-Kanal:diegraefte2024                                  ║
-║  ntfy-Token:••••••••                                        ║
+║  Ping (s):    15                                            ║
+║  Speed (min): 30                                            ║
+║  Offline ab:  3                                             ║
+║  Online ab:   2                                             ║
+║  ntfy-Kanal:  diegraefte2024                                ║
+║  ntfy-Token:  ••••••••                                      ║
 ╠══════════════════════════════════════════════════════════════╣
 ║ Kanal: a-z A-Z 0-9 - _   Token optional (leer = ohne)        ║
 ╚══════════════════════════════════════════════════════════════╝

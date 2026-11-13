@@ -1062,7 +1062,7 @@ def build_form_modal(modal, mw):
         elif f.get("type") == "select":
             val = "< {} >".format(val if val else "-")
         cursor = "\u258f" if idx == modal.get("focus") else ""
-        content = " {:<10}{}{}".format(f["label"] + ":", val, cursor)
+        content = " {:<11} {}{}".format(f["label"] + ":", val, cursor)
         if idx == modal.get("focus"):
             content = CLR["modalhi"] + padto(content, mw - 4) + RST
         lines.append(mline(content))
