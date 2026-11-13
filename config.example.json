@@ -337,7 +337,8 @@
   "deconz": {
     "url": "http://192.168.178.247",
     "apikey": "DEIN-DECONZ-API-KEY",
-    "timeout": 6
+    "timeout": 6,
+    "notify": false
   },
   "homematic": {
     "enabled": true,
@@ -346,7 +347,8 @@
     "battery_empty_volt": 2.2,
     "battery_weak_volt": 2.5,
     "rssi_weak": -85,
-    "rssi_bad": -95
+    "rssi_bad": -95,
+    "notify": false
   },
   "fritzbox": {
     "enabled": true,

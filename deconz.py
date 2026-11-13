@@ -240,6 +240,18 @@ def poll(cfg):
     sensors = data.get("sensors") or {}
     conf = data.get("config") or {}
 
+    empty_names = []
+    weak_names = []
+    for grp in out_groups:
+        for dev in grp.get("devices") or []:
+            bat = dev.get("battery")
+            if bat is None:
+                continue
+            if int(bat) == 0:
+                empty_names.append(dev.get("name") or "?")
+            elif int(bat) <= BATTERY_WEAK:
+                weak_names.append(dev.get("name") or "?")
+
     return {
         "ok": True,
         "ts": time.time(),
@@ -262,6 +274,10 @@ def poll(cfg):
         "battery_none": total - battery_total,
         "battery_weak_limit": BATTERY_WEAK,
         "groups": out_groups,
+        "problems": {
+            "empty": sorted(empty_names),
+            "weak": sorted(weak_names),
+        },
         "error": None,
     }
 
@@ -282,12 +298,38 @@ def _write(data):
     os.replace(tmp, OUT)
 
 
+def _notify_problems(prev, out):
+    """Meldet neu leere/schwache Akkus und Entwarnungen (nur bei Wechsel)."""
+    # Ohne vorherigen, vollstaendigen Stand ist das der Basis-Lauf: kein Alarm.
+    if not prev.get("ok") or "problems" not in prev:
+        return
+    try:
+        import notify as ntfy
+    except Exception:
+        return
+    pv = prev.get("problems") or {}
+    nv = out.get("problems") or {}
+    for key, label, tags, prio in (
+            ("empty", "Akku leer", "battery,warning", "high"),
+            ("weak", "Akku schwach", "battery", None)):
+        added, gone = ntfy.diff(pv.get(key), nv.get(key))
+        if added:
+            ntfy.send("deCONZ {}: {}".format(label, ntfy.join_names(added)),
+                      title="deCONZ: {}".format(label), tags=tags, priority=prio)
+        elif gone:
+            ntfy.send("deCONZ {} wieder ok: {}".format(label, ntfy.join_names(gone)),
+                      title="deCONZ: {} behoben".format(label),
+                      tags="battery,white_check_mark")
+
+
 def main():
     try:
         with open(CONFIG) as f:
             cfg = json.load(f)
     except Exception:
         cfg = {}
+
+    prev = _previous()
 
     try:
         out = poll(cfg)
@@ -314,6 +356,8 @@ def main():
         return 1
 
     _write(out)
+    if (cfg.get("deconz") or {}).get("notify"):
+        _notify_problems(prev, out)
     print("deCONZ: {}/{} Geraete verbunden, {} Typen, Akku {}/{}".format(
         out["online"], out["total"], len(out["groups"]),
         out["battery_total"], out["total"]))

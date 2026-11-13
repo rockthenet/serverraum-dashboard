@@ -17,6 +17,23 @@ def _topic():
         return None
 
 
+def diff(prev_names, new_names):
+    """(neu dazugekommen, wieder behoben) als sortierte Namenslisten."""
+    prev = set(prev_names or [])
+    new = set(new_names or [])
+    return sorted(new - prev), sorted(prev - new)
+
+
+def join_names(names, limit=8):
+    """Namensliste kompakt fuer eine Meldung (gekuerzt mit '+N weitere')."""
+    names = list(names or [])
+    head = names[:limit]
+    text = ", ".join(head)
+    if len(names) > limit:
+        text += " (+{} weitere)".format(len(names) - limit)
+    return text
+
+
 def send(message, title=None, tags=None, priority=None):
     """Schickt eine Push-Nachricht an ntfy.sh/<topic>. Fehler werden ignoriert."""
     topic = _topic()

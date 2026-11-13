@@ -236,6 +236,34 @@ def _write(data):
     os.replace(tmp, OUT)
 
 
+def _notify_problems(prev, out):
+    """Meldet neu leere/schwache Batterien und Entwarnungen (nur bei Wechsel)."""
+    # Ohne vorherigen, vollstaendigen Stand ist das der Basis-Lauf: kein Alarm.
+    if not prev.get("ok") or "problems" not in prev:
+        return
+    try:
+        import notify as ntfy
+    except Exception:
+        return
+    pv = prev.get("problems") or {}
+    nv = out.get("problems") or {}
+
+    def names(bucket):
+        return [p.get("name") or "?" for p in (bucket or [])]
+
+    for key, label, tags, prio in (
+            ("empty", "Batterie leer", "battery,warning", "high"),
+            ("weak", "Batterie schwach", "battery", None)):
+        added, gone = ntfy.diff(names(pv.get(key)), names(nv.get(key)))
+        if added:
+            ntfy.send("HomeMatic {}: {}".format(label, ntfy.join_names(added)),
+                      title="HomeMatic: {}".format(label), tags=tags, priority=prio)
+        elif gone:
+            ntfy.send("HomeMatic {} wieder ok: {}".format(label, ntfy.join_names(gone)),
+                      title="HomeMatic: {} behoben".format(label),
+                      tags="battery,white_check_mark")
+
+
 def main():
     try:
         with open(CONFIG) as f:
@@ -247,6 +275,8 @@ def main():
     if hm.get("enabled") is False:
         print("HomeMatic: deaktiviert")
         return 0
+
+    prev = _previous()
 
     try:
         out = poll(cfg)
@@ -269,6 +299,8 @@ def main():
         return 1
 
     _write(out)
+    if hm.get("notify"):
+        _notify_problems(prev, out)
     print("HomeMatic: {} Geraete, {} live, {} leer/{} schwach, "
           "{} schlecht/{} maeßig, {} offline".format(
               out["total"], out["live"], out["battery_empty"],

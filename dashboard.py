@@ -589,6 +589,39 @@ def save_config(cfg):
         pass
 
 
+NOTIFY_SECTIONS = ("deconz", "homematic", "thread")
+
+
+def poller_notify(section):
+    """Sind ntfy-Meldungen fuer deCONZ/HomeMatic/Thread eingeschaltet?"""
+    sec = CFG.get(section) or {}
+    return bool(sec.get("notify"))
+
+
+def set_poller_notify(section, value):
+    """Meldungen fuer einen Poller in config.json umschalten."""
+    cfg = load(CONFIG)
+    if not isinstance(cfg, dict):
+        return False
+    sec = cfg.get(section)
+    if not isinstance(sec, dict):
+        sec = {}
+        cfg[section] = sec
+    sec["notify"] = bool(value)
+    try:
+        save_config(cfg)
+    except Exception:
+        return False
+    return True
+
+
+def notify_txt(section):
+    """Kompakter Status 'Meldung: ein/aus' fuer die Modal-Fusszeile."""
+    if poller_notify(section):
+        return CLR["gray"] + "Meldung: " + CLR["green"] + "ein" + CLR["gray"] + " [n]"
+    return CLR["gray"] + "Meldung: " + CLR["dark"] + "aus" + CLR["gray"] + " [n]"
+
+
 _LOAD_CACHE = {}
 
 
@@ -2155,8 +2188,8 @@ def build_thread_modal(modal, mw):
                     len(body) - 3) + RST))
 
     lines.append(msep())
-    lines.append(mline(CLR["gray"] + "Stand {}   [ESC]/[q] schliessen".format(
-        fmt_ts(th.get("ts"))) + RST))
+    lines.append(mline(CLR["gray"] + "Stand {}   [ESC]/[q] schliessen   ".format(
+        fmt_ts(th.get("ts"))) + notify_txt("thread") + RST))
     lines.append(mbg + MBOX["bl"] + MBOX["h"] * (mw - 2) + MBOX["br"] + RST)
     return lines
 
@@ -2294,7 +2327,8 @@ def build_homematic_modal(modal, mw, max_rows=None):
         lines.append(mline(CLR["red"] + BOLD + "NICHT ERREICHBAR" + RST))
         lines.append(mline(CLR["gray"] + clip(err, mw - 4) + RST))
         lines.append(msep())
-        lines.append(mline(CLR["gray"] + "[ESC] oder [q] schliessen" + RST))
+        lines.append(mline(CLR["gray"] + "[ESC]/[q] schliessen   "
+                           + notify_txt("homematic") + RST))
         lines.append(mbg + MBOX["bl"] + MBOX["h"] * (mw - 2) + MBOX["br"] + RST)
         return lines
 
@@ -2360,8 +2394,8 @@ def build_homematic_modal(modal, mw, max_rows=None):
             lines.append(mline("  " + chunk))
 
     lines.append(msep())
-    lines.append(mline(CLR["gray"] + "Stand {}   [ESC]/[q] schliessen".format(
-        fmt_ts(hm.get("ts"))) + RST))
+    lines.append(mline(CLR["gray"] + "Stand {}   [ESC]/[q]   ".format(
+        fmt_ts(hm.get("ts"))) + notify_txt("homematic") + RST))
     lines.append(mbg + MBOX["bl"] + MBOX["h"] * (mw - 2) + MBOX["br"] + RST)
 
     if not max_rows:
@@ -2388,8 +2422,8 @@ def build_homematic_modal(modal, mw, max_rows=None):
         head[1] = (mhi + MBOX["v"] + " "
                    + padto(clip(title, mw - 4), mw - 4) + " " + MBOX["v"] + RST)
         foot[1] = mline(CLR["gray"]
-                        + "Stand {}   \u2191\u2193 bl\u00e4ttern  ESC/q".format(
-                            fmt_ts(hm.get("ts"))) + RST)
+                        + "Stand {}   \u2191\u2193 bl\u00e4ttern  ESC/q  ".format(
+                            fmt_ts(hm.get("ts"))) + notify_txt("homematic") + RST)
 
     return head + content[scroll:scroll + body_h] + foot
 
@@ -2552,7 +2586,8 @@ def build_deconz_modal(modal, mw, max_rows=None):
                 len(weak_devs) - weak_cap) + RST))
 
     lines.append(msep())
-    lines.append(mline(CLR["gray"] + "[ESC] oder [q] schliessen" + RST))
+    lines.append(mline(CLR["gray"] + "[ESC]/[q] schliessen   "
+                       + notify_txt("deconz") + RST))
     lines.append(mbg + MBOX["bl"] + MBOX["h"] * (mw - 2) + MBOX["br"] + RST)
     return lines
 
@@ -2982,7 +3017,12 @@ def handle_input(data, active_panel, sel_dev, sel_guest, sel_ap, sel_dc,
                     res["modal_action"] = "notify"
                 elif b == 0x20:
                     res["modal_action"] = "pause"
+            elif modal["type"] in ("deconz", "thread"):
+                if c in ("n", "N"):
+                    res["modal_action"] = "notify_toggle"
             elif modal["type"] == "homematic":
+                if c in ("n", "N"):
+                    res["modal_action"] = "notify_toggle"
                 cur = int(modal.get("scroll") or 0)
                 mx = int(modal.get("max_scroll") or 0)
                 if c in ("j", "J"):
@@ -3678,6 +3718,15 @@ def main():
                         CFG = load(CONFIG) or CFG
                         modal["dev"] = find_device(gid, nm) or modal["dev"]
                         modal["result"] = "Meldung: {}".format(NOTIFY_LABELS[newmode])
+                elif (modal["type"] in NOTIFY_SECTIONS
+                        and mact == "notify_toggle"):
+                    new = not poller_notify(modal["type"])
+                    if set_poller_notify(modal["type"], new):
+                        CFG = load(CONFIG) or CFG
+                        msg = "{}: Meldungen {}".format(
+                            modal["type"],
+                            "eingeschaltet" if new else "ausgeschaltet")
+                        msg_until = time.time() + 3
                 elif modal["type"] == "device" and mact == "delete":
                     modal = {
                         "type": "confirm",

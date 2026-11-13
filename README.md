@@ -77,7 +77,7 @@ Nur **Python 3 stdlib + `fping`** — kein pip, kein venv, kein Framework.
 | `d`                  | **Geraet loeschen** (mit Rueckfrage)                  |
 | `c`                  | **Intervalle + Meldungen einstellen** (Ping, Speedtest, Offline/Online ab) |
 | `f`                  | **FRITZ!Box-Modal** (Leitung, aktuelle Auslastung, Peak, Traffic) |
-| `n`                  | Im Geräte-Modal: **ntfy-Meldung** umschalten (aus → down → up → beides) |
+| `n`                  | Im Geräte-Modal: **ntfy-Meldung** umschalten (aus → down → up → beides); im deCONZ-/HomeMatic-/Thread-Modal: **Meldungen ein/aus** |
 | `1`..`5`             | Im Proxmox-Guest-Modal: Start / Shutdown / Reboot / Reset / Backup |
 | `s` / `r`            | Im Proxmox-Server-Modal: **ganzen Node herunterfahren / neu starten** (mit `j` bestaetigen) |
 | `q` / `ESC`          | Modal schliessen (wenn offen) bzw. **Dashboard beenden** (zu Bash) |
@@ -144,6 +144,25 @@ Nur **Python 3 stdlib + `fping`** — kein pip, kein venv, kein Framework.
   online/total und erscheint als `PAUSE` (Header: `⏸N`). Erneutes `Space`
   aktiviert es wieder.
 - `d` loescht nach Rueckfrage, `Enter` zeigt Details inkl. derselben Aktionen.
+
+### Meldungen fuer deCONZ, HomeMatic und Thread
+
+Die Modals von deCONZ, HomeMatic und dem Thread-Border-Router haben unten
+einen Umschalter `Meldung: ein/aus [n]`. Eingeschaltet schickt der jeweilige
+Poller eine ntfy-Nachricht, sobald sich etwas aendert:
+
+| Bereich | Meldung bei |
+|---|---|
+| deCONZ | neuer Akku leer (`warning`/hoch) bzw. schwach; Entwarnung, wenn wieder ok |
+| HomeMatic | neue `LOWBAT`-/≤2,2 V-Batterie bzw. schwach (≤2,5 V); Entwarnung |
+| Thread-BR | Streamer nicht erreichbar (Port zu) bzw. wieder erreichbar; Thread-Netz inaktiv bzw. wieder aktiv |
+
+- gemeldet wird **nur bei echten Wechseln** – beim ersten Lauf (oder wenn der
+  Poller zuvor nicht erreichbar war) gibt es bewusst keinen Alarm
+- die Einstellung landet in `config.json` (`deconz.notify`, `homematic.notify`,
+  `thread.notify`) und gilt sofort, ohne Dienst-Neustart
+- Standard ist `aus` (bei Thread im Beispiel `ein`), damit nichts ungefragt
+  meldet
 
 Aenderungen werden atomar in `config.json` geschrieben (Modus 600) - kein
 Editor und kein Dienst-Neustart noetig.
@@ -464,6 +483,8 @@ Akku-/Funk-Zeile wie HomeMatic:
 - bei sehr schmalen Terminals rückt alles in eine Zeile (`A0/3 F10`)
 - **Klick auf den Block** (oder `Tab` bis `PROXMOX + UNIFI`, dann `↓` bis
   deCONZ und `Enter`) öffnet die Detailübersicht
+- im Modal schaltet `n` die **Akku-Meldungen** ein/aus (siehe
+  [Meldungen](#meldungen-fuer-deconz-homematic-und-thread))
 - Ist das Gateway nicht erreichbar, bleiben die letzten Zahlen sichtbar
   (`nicht erreichbar (Daten vor …)`)
 
@@ -515,7 +536,8 @@ Zugang in `config.json` (Modus 600, **nicht ins Repo**):
 "deconz": {
   "url": "http://192.168.178.247",
   "apikey": "…",
-  "timeout": 6
+  "timeout": 6,
+  "notify": false
 }
 ```
 
@@ -535,6 +557,8 @@ HomeMatic-Block. Er fasst die physischen Geräte der CCU zusammen:
 - Farbe: grün = keine Auffälligkeit, gelb = mindestens ein Problem
 - **Klick auf den Block** oder Taste `m` öffnet das Detail-Modal; alternativ
   `Tab` bis `HOMEMATIC [AKTIV]` und `Enter`
+- im Modal schaltet `n` die **Batterie-Meldungen** ein/aus (siehe
+  [Meldungen](#meldungen-fuer-deconz-homematic-und-thread))
 - Reicht der Platz nur für eine Zeile (z. B. 100×30), wird kompakt
   zusammengefasst: `⌂ HM 92 · 88 live · Akku 2 · Funk 11`
 - Ist die CCU nicht erreichbar, bleiben die letzten Zahlen mit Zeitstempel
@@ -595,7 +619,8 @@ Interface) und `statelist.cgi` (Zustände). Zugang in `config.json`
   "battery_empty_volt": 2.2,
   "battery_weak_volt": 2.5,
   "rssi_weak": -85,
-  "rssi_bad": -95
+  "rssi_bad": -95,
+  "notify": false
 }
 ```
 
@@ -702,7 +727,9 @@ Zugang in `config.json` (Modus 600, **nicht ins Repo**):
 
 `"adb": false` schaltet die Proben ab (dann bleibt nur der Port-Check).
 Der Job laeuft im Scheduler alle 60 s; ein `adb connect` kostet nur dann Zeit,
-wenn ADB aktiviert ist.
+wenn ADB aktiviert ist. Im Modal schaltet `n` die **Erreichbarkeits-/Thread-
+Meldungen** ein/aus (siehe
+[Meldungen](#meldungen-fuer-deconz-homematic-und-thread)).
 
 ## Statusdauer
 
