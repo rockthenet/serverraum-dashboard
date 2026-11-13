@@ -316,10 +316,11 @@ def _notify_session_swap(old_tty, new_tty, old_proc=None, new_proc=None):
 
     def label(tty, proc):
         user, host = proc or ("", "")
-        if user or host:
-            return "{} von {} ({})".format(user or "unbekannt",
-                                            host or "unbekannt",
-                                            (tty or "-").replace("/dev/", ""))
+        key = (tty or "-").replace("/dev/", "")
+        if user:
+            if host:
+                return "{} von {} ({})".format(user, host, key)
+            return "{} ({})".format(user, key)
         return _session_label(tty, sessions)
 
     old = label(old_tty, old_proc)
