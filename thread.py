@@ -141,6 +141,26 @@ def _which(name):
     return None
 
 
+def _compact_probe(cmd, text):
+    """Fuer die Anzeige: aus `dumpsys connectivity` nur den Thread-Agent ziehen."""
+    if "connectivity" not in cmd.lower():
+        return text
+    for line in text.splitlines():
+        if "NetworkAgentInfo" not in line or "Transports: THREAD" not in line:
+            continue
+        state = ("CONNECTED" if _AGENT_OK_RE.search(line)
+                 else "nicht CONNECTED")
+        parts = ["ThreadNetworkAgent: {}".format(state)]
+        m = _NET_NAME_RE.search(line)
+        if m:
+            parts.append("Netz {}".format(m.group(1)))
+        m = _NET_CHANNEL_RE.search(line)
+        if m:
+            parts.append("Kanal {}".format(m.group(1)))
+        return "  ".join(parts)
+    return "kein Thread-Netzwerk-Agent"
+
+
 def adb_probe(host, port, commands, timeout):
     """Fuehrt die Probe-Kommandos aus und sammelt die Ausgaben."""
     serial = "{}:{}".format(host, port)
@@ -151,7 +171,7 @@ def adb_probe(host, port, commands, timeout):
         full = (out or err).strip()
         texts.append(full)
         results.append({"cmd": cmd, "rc": rc,
-                        "out": full[:4000]})
+                        "out": _compact_probe(cmd, full)[:4000]})
         # Fruehester eindeutiger Treffer reicht; der Rest waere nur Redundanz.
         state, evidence = _classify(texts)
         if state != "unknown":
