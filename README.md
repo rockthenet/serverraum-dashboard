@@ -38,8 +38,9 @@ Zeigt in einem mehrspaltigen ASCII-Layout:
 - **Verwaltung im TUI**: Geräte anlegen / bearbeiten / pausieren / löschen,
   Intervalle für Ping und Speedtest einstellen, Statusdauer je Gerät
 - **ntfy-Meldungen pro Gerät und Integration**: auf Wunsch bei DOWN, UP oder beidem
-- **HTTP-Webview** (`web.py`): dieselbe Ansicht read-only im Browser, als eigener
-  Dienst ohne zusätzlichen interaktiven Dashboard-Platz
+- **HTTP-Webview** (`web.py`): dieselbe Ansicht im Browser, als eigener Dienst
+  ohne zusätzlichen interaktiven Dashboard-Platz; Klick öffnet Details, Aktionen
+  bleiben der TUI vorbehalten
 - **Uptime**, **CPU-** und **RAM-Auslastung** des Dashboards-Rechners in der Titelzeile
 
 Nur **Python 3 stdlib + `fping`** — kein pip, kein venv, kein Framework.
@@ -437,8 +438,12 @@ interaktiven Plaetze zu belegen:
   ganzen Bildschirm
 - Favicon ist das Symbol 🔳 (`U+1F533`), eingebettet als SVG-Data-URI; die
   Route `/favicon.ico` liefert dasselbe SVG
-- **keine Eingaben**: Klicks/Tasten gibt es nur in der TUI; die HTML-Seite ist
-  ausschliesslich eine Anzeige
+- **Maus oeffnet nur Modale**: Klick auf eine Geraete-/Guest-/AP-/Node-Zeile,
+  auf den FRITZ-Status oder auf deCONZ/HomeMatic/Thread oeffnet die jeweilige
+  Lightbox (`?m=guest:3` & Co. in der URL, dadurch ueberlebt sie den Refresh);
+  Klick ausserhalb des Modals oder `Esc` schliesst sie wieder
+- **keine Aktionen**: im Modal stehen nur Details/Status, kein Start/Stop/Pause;
+  Schreibaktionen gibt es ausschliesslich in der TUI
 - laeuft als eigener kleiner systemd-Dienst (`netbook-dashboard-web.service`)
   mit `CAP_NET_BIND_SERVICE` (Port 80 ohne root); ist Port 80 nicht erlaubt,
   faellt der Server automatisch auf **8088** aus
