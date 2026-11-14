@@ -1373,7 +1373,7 @@ def render(w, h, state, prox, speed, uni, dc, frame, active_panel,
     oc = CLR["green"] if online == total else (CLR["yellow"] if online else CLR["red"])
     dev_txt = oc + "{}/{} Geraete".format(online, total) + RST
     if paused_n:
-        dev_txt += CLR["gray"] + " \u23f8{}".format(paused_n) + RST
+        dev_txt += CLR["gray"] + " II{}".format(paused_n) + RST
     sp_variants = []
     if fb and fb.get("ok") and fb.get("down_bps"):
         dm = (fb.get("down_bps") or 0) / 1e6
@@ -1764,7 +1764,7 @@ def build_device_lines(devs, state, w, sel_dev, hit_rows=None):
         label = grp.get("label", gid)
         head = gc + BOLD + "\u25b8 " + label + RST + gc + " [{}/{}]".format(gn, gt) + RST
         if paused_n:
-            head += CLR["gray"] + " \u23f8{}".format(paused_n) + RST
+            head += CLR["gray"] + " II{}".format(paused_n) + RST
         block.append(head)
         for d in dv:
             rec = devs.get("{}|{}".format(gid, d["name"]), {}) or {}
@@ -2020,7 +2020,7 @@ def build_unifi_lines(uni, w, max_lines, sel_ap=-1, hit_rows=None):
     if wired:
         head += CLR["dark"] + " \u00b7 {} LAN".format(wired) + RST
     if poller_paused("unifi"):
-        head += CLR["yellow"] + " \u23f8 PAUSE" + RST
+        head += CLR["yellow"] + " II PAUSE" + RST
     out.append(head)
     if max_lines is not None and len(out) >= max_lines:
         return out
@@ -2124,7 +2124,7 @@ def build_deconz_lines(dc, w, max_lines, sel=False, hit_rows=None):
                 text = cand
                 break
         if poller_paused("deconz"):
-            text += " \u23f8"
+            text += " II"
         line1 = "{}\u2b21 {}{}".format(hc, text, RST)
         if sel:
             line1 = hl(line1, w)
@@ -2139,7 +2139,7 @@ def build_deconz_lines(dc, w, max_lines, sel=False, hit_rows=None):
         line1 = "{}\u2b21 deCONZ {} \u00b7 {} live{}".format(
             hc, total, online, RST)
     if poller_paused("deconz"):
-        line1 += CLR["yellow"] + " \u23f8 PAUSE" + RST
+        line1 += CLR["yellow"] + " II PAUSE" + RST
     if sel:
         line1 = hl(line1, w)
     if hit_rows is not None:
@@ -2213,7 +2213,7 @@ def build_thread_lines(th, w, max_lines, sel=False, hit_rows=None):
         net += " K{}".format(ch)
     pause = ""
     if poller_paused("thread"):
-        pause = CLR["yellow"] + " \u23f8" + RST
+        pause = CLR["yellow"] + " II" + RST
 
     variants = [
         "{}\u2301 {}{}{}  \u00b7  {}  \u00b7  {}{}{}".format(
@@ -2413,7 +2413,7 @@ def build_homematic_lines(hm, w, max_lines, sel=False, hit_rows=None):
                 text = cand
                 break
         if poller_paused("homematic"):
-            text += " \u23f8"
+            text += " II"
         line1 = "{}\u2302 {}{}".format(hc, text, RST)
         if sel:
             line1 = hl(line1, w)
@@ -2427,7 +2427,7 @@ def build_homematic_lines(hm, w, max_lines, sel=False, hit_rows=None):
     else:
         line1 = "{}\u2302 HM {} \u00b7 {} live{}".format(hc, total, live, RST)
     if poller_paused("homematic"):
-        line1 += CLR["yellow"] + " \u23f8 PAUSE" + RST
+        line1 += CLR["yellow"] + " II PAUSE" + RST
     if sel:
         line1 = hl(line1, w)
     if hit_rows is not None:
