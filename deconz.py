@@ -318,7 +318,9 @@ def _notify_problems(prev, out):
             ("weak", "Akku schwach", "battery", None)):
         added, gone = ntfy.diff(pv.get(key), nv.get(key))
         alerts = []
-        for name in added:
+        # Alle aktuellen Probleme durch die 24-h-Sperre schicken, damit
+        # bestehende Auffaelligkeiten eine Erinnerung bekommen koennen.
+        for name in (nv.get(key) or []):
             due, kind = ntfy.battery_decide(state, name, key, True)
             if due and kind == "alert":
                 alerts.append(name)
