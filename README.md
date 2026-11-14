@@ -429,7 +429,14 @@ zweites, nur lesendes Geraet (Handy, Tablet, PC), ohne einen der beiden
 interaktiven Plaetze zu belegen:
 
 - rendert `dashboard.render()` serverseitig, wandelt ANSI-Farben in HTML um
-- `http://<netbook-ip>/` mit Auto-Refresh alle 10 s; `/healthz` liefert `ok`
+- `http://<netbook-ip>/` aktualisiert sich alle 10 s per `fetch('/frame')` und
+  ersetzt nur den Text – kein Voll-Reload, kein Flackern; `/healthz` liefert `ok`
+- **automatische Fenstergroesse**: ohne `?w=`/`?h=` misst JavaScript Zellbreite
+  und Zeilenhoehe und laedt die passende Terminalgroesse nach (`?auto=1`);
+  `?w=120&h=40` erzwingt eine feste Groesse, der Button **Vollbild** nutzt den
+  ganzen Bildschirm
+- Favicon ist das Symbol 🔳 (`U+1F533`), eingebettet als SVG-Data-URI; die
+  Route `/favicon.ico` liefert dasselbe SVG
 - **keine Eingaben**: Klicks/Tasten gibt es nur in der TUI; die HTML-Seite ist
   ausschliesslich eine Anzeige
 - laeuft als eigener kleiner systemd-Dienst (`netbook-dashboard-web.service`)

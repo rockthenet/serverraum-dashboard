@@ -1859,11 +1859,30 @@ def build_proxmox_lines(prox, w, sel_guest, hit_rows=None,
             bar(memf, 7, CLR["green"] if memf < 0.85 else CLR["orange"]),
             bar(dskf, 7, CLR["green"] if dskf < 0.85 else CLR["orange"]))
         out.append(info)
-        subline = "  {}CPU{:.0f}% RAM{:.0f}% DSK{:.0f}%{}".format(
+        subline = "  {}CPU{:>3.0f}%  RAM{:>3.0f}%  DSK{:>3.0f}%{}".format(
             CLR["dark"], cpu, memf * 100, dskf * 100, RST)
         out.append(subline)
 
-        for g in node.get("guests", []):
+        guests = node.get("guests", [])
+        # Einheitliche Spalten pro Node: sonst verschieben kurze RAM-Texte
+        # (z.B. "60M/512M") den Balken gegenueber "926M/2.0G".
+        mem_w = 0
+        prefix_w = 7
+        for g in guests:
+            if g.get("status") == "running":
+                mt = "{}/{}".format(human_bytes(g.get("mem", 0)),
+                                    human_bytes(g.get("maxmem", 0)))
+                mem_w = max(mem_w, len(mt))
+            prefix_w = max(prefix_w, 2 + 1 + 1 + len(g.get("type") or "CT") + 1)
+        bar_w = 6
+        tail_w = bar_w + 1 + mem_w
+        avail = w - prefix_w - 1 - 5 - 1
+        if avail - tail_w < 8:
+            bar_w = 4
+            tail_w = bar_w + 1 + mem_w
+        name_w = max(4, avail - tail_w)
+
+        for g in guests:
             running = g["status"] == "running"
             if running:
                 sdot = CLR["green"] + "\u25b6" + RST
@@ -1876,23 +1895,13 @@ def build_proxmox_lines(prox, w, sel_guest, hit_rows=None,
             name = g["name"]
             sel = (sel_kind == "guest" and gi == sel_guest)
             prefix = "  {} {} ".format(sdot, typ)
-            prefix_w = 2 + 1 + 1 + len(g["type"]) + 1
             if running:
-                memtxt = "{}/{}".format(human_bytes(g["mem"]), human_bytes(g["maxmem"]))
-                membar = bar(memf, 6, CLR["green"] if memf < 0.85 else CLR["orange"])
+                memtxt = "{}/{}".format(human_bytes(g["mem"]),
+                                        human_bytes(g["maxmem"])).rjust(mem_w)
+                membar = bar(memf, bar_w, CLR["green"] if memf < 0.85 else CLR["orange"])
                 up = human_uptime_short(g.get("uptime", 0)).rjust(5)
-                tail = "{} {}".format(membar, memtxt)
-                # Feste Spalten: Name linksbuendig, Uptime 5 Zeichen, RAM rechts.
-                name_w = max(8, w - prefix_w - 1 - 5 - 1 - vlen(tail))
                 line = (prefix + padto(clip(name, name_w), name_w) + " "
-                        + CLR["gray"] + up + RST + " " + tail)
-                if vlen(line) > w:
-                    tail = "{} {}".format(
-                        bar(memf, 4, CLR["green"] if memf < 0.85 else CLR["orange"]),
-                        memtxt)
-                    name_w = max(8, w - prefix_w - 1 - 5 - 1 - vlen(tail))
-                    line = (prefix + padto(clip(name, name_w), name_w) + " "
-                            + CLR["gray"] + up + RST + " " + tail)
+                        + CLR["gray"] + up + RST + " " + membar + " " + memtxt)
             else:
                 line = (prefix + name + CLR["dark"] + "  stopped" + RST)
             if vlen(line) > w:

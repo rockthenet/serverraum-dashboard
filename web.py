@@ -5,12 +5,16 @@
 Rendert dieselbe TUI-Ansicht als HTML (nur lesend, ohne Eingaben).
 Nutzt ausschliesslich die Python-Standardbibliothek, belegt keinen
 interaktiven Dashboard-Platz und laeuft als eigener kleiner Dienst.
+
+Die Seite aktualisiert sich per fetch() (kein Voll-Reload, kein Flackern)
+und passt die Terminalgroesse automatisch an das Browserfenster an.
 """
 import html
 import os
 import re
 import time
 from http.server import BaseHTTPRequestHandler, HTTPServer
+from urllib.parse import parse_qs, quote, urlparse
 
 import dashboard
 
@@ -35,6 +39,109 @@ BASE16 = [
     "#808080", "#ff0000", "#00ff00", "#ffff00",
     "#0000ff", "#ff00ff", "#00ffff", "#ffffff",
 ]
+
+# Favicon: das "weisse Quadrat"-Symbol (U+1F533) als SVG-Data-URI.
+FAVICON_SVG = (
+    "<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 100 100'>"
+    "<text y='.9em' font-size='88'>\U0001F533</text></svg>")
+FAVICON = "data:image/svg+xml," + quote(FAVICON_SVG, safe="")
+
+PAGE = (
+    "<!doctype html>\n<html lang=\"de\"><head><meta charset=\"utf-8\">\n"
+    "<meta name=\"viewport\" content=\"width=device-width, initial-scale=1\">\n"
+    "<title>Serverraum Dashboard</title>\n"
+    "<link rel=\"icon\" type=\"image/svg+xml\" href=\"__FAVICON__\">\n"
+    "<noscript><meta http-equiv=\"refresh\" content=\"10\"></noscript>\n"
+    "<style>\n"
+    "html,body{margin:0;background:#0b0b0b;color:#dddddd;}\n"
+    "body{padding:8px 10px;font-family:\"DejaVu Sans Mono\",\"Cascadia Mono\","
+    "Consolas,\"Liberation Mono\",monospace;}\n"
+    ".hint{display:flex;align-items:center;gap:8px;color:#777;font-size:11px;"
+    "line-height:18px;height:18px;margin-bottom:4px;font-family:inherit;"
+    "white-space:nowrap;overflow:hidden;}\n"
+    ".hint.err{color:#ff6b6b;}\n"
+    ".hint button{margin-left:auto;background:#132b33;color:#8fe3ee;"
+    "border:1px solid #2b4a55;border-radius:4px;font:inherit;font-size:11px;"
+    "padding:0 8px;height:18px;cursor:pointer;white-space:nowrap;}\n"
+    ".hint button:hover{background:#1b3b45;}\n"
+    "pre{margin:0;font-family:inherit;font-size:14px;line-height:16px;"
+    "letter-spacing:0;font-variant-ligatures:none;font-kerning:none;"
+    "font-synthesis:none;white-space:pre;tab-size:8;\n"
+    "text-rendering:geometricPrecision;}\n"
+    "</style></head><body data-w=\"__W__\" data-h=\"__H__\" "
+    "data-auto=\"__AUTO__\">\n"
+    "<div class=\"hint\" id=\"hint\"><span>Serverraum-Dashboard &middot; "
+    "nur Ansicht &middot; <span id=\"stamp\">__STAMP__</span></span>"
+    "<button id=\"fs\" type=\"button\" title=\"Vollbild\">&#9974; Vollbild"
+    "</button></div>\n"
+    "<pre id=\"dash\">__BODY__</pre>\n"
+    "<script>\n"
+    "(function(){\n"
+    "var body=document.body,pre=document.getElementById('dash');\n"
+    "var stamp=document.getElementById('stamp');\n"
+    "var hint=document.getElementById('hint');\n"
+    "var fs=document.getElementById('fs');\n"
+    "var auto=body.getAttribute('data-auto')==='1';\n"
+    "var curW=parseInt(body.getAttribute('data-w'),10);\n"
+    "var curH=parseInt(body.getAttribute('data-h'),10);\n"
+    "function cellW(){\n"
+    " var cs=getComputedStyle(pre);\n"
+    " var c=document.createElement('canvas').getContext('2d');\n"
+    " c.font=cs.fontStyle+' '+cs.fontWeight+' '+cs.fontSize+' '+cs.fontFamily;\n"
+    " return c.measureText('MMMMMMMMMM').width/10;\n"
+    "}\n"
+    "function lineH(){\n"
+    " var v=parseFloat(getComputedStyle(pre).lineHeight);\n"
+    " return v||16;\n"
+    "}\n"
+    "function target(){\n"
+    " var vw=document.documentElement.clientWidth||window.innerWidth;\n"
+    " var vh=document.documentElement.clientHeight||window.innerHeight;\n"
+    " var w=Math.floor((vw-20)/cellW());\n"
+    " var h=Math.floor((vh-40)/lineH());\n"
+    " return {w:Math.max(80,Math.min(240,w)),h:Math.max(24,Math.min(80,h))};\n"
+    "}\n"
+    "function apply(){\n"
+    " if(!auto)return;\n"
+    " var t=target();\n"
+    " if(t.w!==curW||t.h!==curH){\n"
+    "  location.replace('/?w='+t.w+'&h='+t.h+'&auto=1');\n"
+    " }\n"
+    "}\n"
+    "var rt;\n"
+    "window.addEventListener('resize',function(){clearTimeout(rt);"
+    "rt=setTimeout(apply,300);});\n"
+    "window.addEventListener('load',apply);\n"
+    "function refresh(){\n"
+    " var url='/frame?w='+curW+'&h='+curH;\n"
+    " fetch(url,{cache:'no-store'}).then(function(r){\n"
+    "  if(!r.ok)throw new Error('HTTP '+r.status);\n"
+    "  var s=r.headers.get('X-Stamp');\n"
+    "  var c=parseInt(r.headers.get('X-Cols'),10);\n"
+    "  var rr=parseInt(r.headers.get('X-Rows'),10);\n"
+    "  return r.text().then(function(t){return {t:t,s:s,c:c,r:rr};});\n"
+    " }).then(function(o){\n"
+    "  var top=pre.scrollTop;\n"
+    "  pre.innerHTML=o.t;\n"
+    "  pre.scrollTop=top;\n"
+    "  if(o.s&&stamp)stamp.textContent=o.s;\n"
+    "  if(o.c)curW=o.c; if(o.r)curH=o.r;\n"
+    "  hint.classList.remove('err');\n"
+    " }).catch(function(){hint.classList.add('err');});\n"
+    "}\n"
+    "setInterval(refresh,10000);\n"
+    "document.addEventListener('visibilitychange',function(){"
+    "if(!document.hidden)refresh();});\n"
+    "if(fs)fs.addEventListener('click',function(){\n"
+    " if(document.fullscreenElement){document.exitFullscreen();}\n"
+    " else if(document.documentElement.requestFullscreen){"
+    "document.documentElement.requestFullscreen();}\n"
+    "});\n"
+    "document.addEventListener('fullscreenchange',function(){"
+    "setTimeout(apply,300);});\n"
+    "})();\n"
+    "</script>\n"
+    "</body></html>\n")
 
 
 def _xterm(index):
@@ -129,51 +236,70 @@ def ansi_to_html(line):
     return "".join(out)
 
 
+def _config():
+    return dashboard.load(CONFIG) or {}
+
+
 def _load(name):
     return dashboard.load(os.path.join(HERE, FILES[name]))
 
 
-def build_html():
-    cfg = dashboard.load(CONFIG) or {}
-    dashboard.CFG = cfg
+def _dims(cfg, qs):
+    """Terminalgroesse: Query-Parameter vor config.json, mit sinnvollen Grenzen."""
     width = int(cfg.get("web_width") or 137)
     height = int(cfg.get("web_height") or 38)
-    width = max(80, min(240, width))
-    height = max(24, min(80, height))
+    try:
+        if qs.get("w"):
+            width = int(qs["w"][0])
+    except (TypeError, ValueError):
+        pass
+    try:
+        if qs.get("h"):
+            height = int(qs["h"][0])
+    except (TypeError, ValueError):
+        pass
+    return max(80, min(240, width)), max(24, min(80, height))
 
+
+def _auto(qs):
+    """Automatische Fenstergroesse nur, wenn nichts fest vorgegeben wurde."""
+    if not qs.get("w") and not qs.get("h"):
+        return True
+    return qs.get("auto", ["0"])[0] == "1"
+
+
+def build_frame(width, height, cfg=None):
+    """Rendert die TUI und liefert (HTML-Fragment, Zeitstempel)."""
+    dashboard.CFG = cfg if isinstance(cfg, dict) else _config()
     state = _load("state")
     rows = dashboard.render(
         width, height, state, _load("prox"), _load("speed"), _load("uni"),
         _load("dc"), 0, 1, 0, 0, 0, 0, None, None, 0, "guest",
         fb=_load("fb"), hm=_load("hm"), th=_load("th"))
     body = "\n".join(ansi_to_html(row) for row in rows)
-    stamp = time.strftime("%d.%m.%Y %H:%M:%S")
-    page = (
-        "<!doctype html>\n<html lang=\"de\"><head><meta charset=\"utf-8\">\n"
-        "<meta name=\"viewport\" content=\"width=device-width, initial-scale=1\">\n"
-        "<meta http-equiv=\"refresh\" content=\"10\">\n"
-        "<title>Serverraum Dashboard</title>\n"
-        "<style>\n"
-        "html,body{margin:0;background:#0b0b0b;color:#dddddd;}\n"
-        "body{padding:10px;font-family:\"DejaVu Sans Mono\",Consolas,monospace;}\n"
-        ".hint{color:#777;font-size:11px;margin-bottom:6px;}\n"
-        "pre{font-size:13px;line-height:1.16;white-space:pre;margin:0;"
-        "overflow:auto;}\n"
-        "</style></head><body>\n"
-        "<div class=\"hint\">Serverraum-Dashboard &middot; nur Ansicht &middot; "
-        "Stand __STAMP__</div>\n<pre>__BODY__</pre>\n</body></html>\n")
-    return page.replace("__STAMP__", stamp).replace("__BODY__", body)
+    return body, time.strftime("%d.%m.%Y %H:%M:%S")
+
+
+def build_html(width, height, body, stamp, auto):
+    return (PAGE.replace("__FAVICON__", FAVICON)
+            .replace("__W__", str(width))
+            .replace("__H__", str(height))
+            .replace("__AUTO__", "1" if auto else "0")
+            .replace("__STAMP__", stamp)
+            .replace("__BODY__", body))
 
 
 class Handler(BaseHTTPRequestHandler):
-    server_version = "NetbookDashboard/1.0"
+    server_version = "NetbookDashboard/1.1"
 
-    def _send(self, code, payload, ctype):
+    def _send(self, code, payload, ctype, headers=None):
         data = payload.encode("utf-8") if isinstance(payload, str) else payload
         self.send_response(code)
         self.send_header("Content-Type", ctype)
         self.send_header("Content-Length", str(len(data)))
         self.send_header("Cache-Control", "no-store")
+        for key, value in (headers or {}).items():
+            self.send_header(key, value)
         self.end_headers()
         try:
             self.wfile.write(data)
@@ -181,15 +307,37 @@ class Handler(BaseHTTPRequestHandler):
             pass
 
     def do_GET(self):
-        path = self.path.split("?")[0]
-        if path in ("/", "/index.html"):
+        url = urlparse(self.path)
+        path = url.path or "/"
+        qs = parse_qs(url.query)
+        if path == "/frame":
             try:
-                self._send(200, build_html(), "text/html; charset=utf-8")
+                cfg = _config()
+                width, height = _dims(cfg, qs)
+                body, stamp = build_frame(width, height, cfg)
+                self._send(200, body, "text/html; charset=utf-8", {
+                    "X-Stamp": stamp,
+                    "X-Cols": str(width),
+                    "X-Rows": str(height),
+                })
+            except Exception as exc:
+                self._send(500, "Dashboard-Fehler: {}\n".format(
+                    html.escape(str(exc))), "text/plain; charset=utf-8")
+        elif path in ("/", "/index.html"):
+            try:
+                cfg = _config()
+                width, height = _dims(cfg, qs)
+                body, stamp = build_frame(width, height, cfg)
+                self._send(200, build_html(width, height, body, stamp,
+                                           _auto(qs)),
+                           "text/html; charset=utf-8")
             except Exception as exc:
                 self._send(500, "Dashboard-Fehler: {}\n".format(
                     html.escape(str(exc))), "text/plain; charset=utf-8")
         elif path == "/healthz":
             self._send(200, "ok\n", "text/plain; charset=utf-8")
+        elif path == "/favicon.ico":
+            self._send(200, FAVICON_SVG, "image/svg+xml; charset=utf-8")
         else:
             self._send(404, "nicht gefunden\n", "text/plain; charset=utf-8")
 
@@ -198,7 +346,7 @@ class Handler(BaseHTTPRequestHandler):
 
 
 def main():
-    cfg = dashboard.load(CONFIG) or {}
+    cfg = _config()
     host = str(cfg.get("web_bind") or "0.0.0.0")
     port = int(cfg.get("web_port") or 80)
     try:
