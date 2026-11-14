@@ -237,7 +237,10 @@ def _write(data):
 
 
 def _notify_problems(prev, out):
-    """Meldet neu leere/schwache Batterien und Entwarnungen (nur bei Wechsel)."""
+    """Meldet Batterieprobleme mit 24-h-Sperre pro Geraet (kein Spam)."""
+    state = prev.get("battery_state")
+    state = dict(state) if isinstance(state, dict) else {}
+    out["battery_state"] = state
     # Ohne vorherigen, vollstaendigen Stand ist das der Basis-Lauf: kein Alarm.
     if not prev.get("ok") or "problems" not in prev:
         return
@@ -251,15 +254,29 @@ def _notify_problems(prev, out):
     def names(bucket):
         return [p.get("name") or "?" for p in (bucket or [])]
 
+    all_cur = set(names(nv.get("empty"))) | set(names(nv.get("weak")))
     for key, label, tags, prio in (
             ("empty", "Batterie leer", "battery,warning", "high"),
             ("weak", "Batterie schwach", "battery", None)):
         added, gone = ntfy.diff(names(pv.get(key)), names(nv.get(key)))
-        if added:
-            ntfy.send("HomeMatic {}: {}".format(label, ntfy.join_names(added)),
+        alerts = []
+        for name in added:
+            due, kind = ntfy.battery_decide(state, name, key, True)
+            if due and kind == "alert":
+                alerts.append(name)
+        recover = []
+        for name in gone:
+            if name in all_cur:
+                continue          # Kategoriewechsel, kein "behoben"
+            due, kind = ntfy.battery_decide(state, name, key, False)
+            if due and kind == "recover":
+                recover.append(name)
+        if alerts:
+            ntfy.send("HomeMatic {}: {}".format(label, ntfy.join_names(alerts)),
                       title="HomeMatic: {}".format(label), tags=tags, priority=prio)
-        elif gone:
-            ntfy.send("HomeMatic {} wieder ok: {}".format(label, ntfy.join_names(gone)),
+        if recover:
+            ntfy.send("HomeMatic {} wieder ok: {}".format(
+                label, ntfy.join_names(recover)),
                       title="HomeMatic: {} behoben".format(label),
                       tags="battery,white_check_mark")
 
@@ -274,6 +291,9 @@ def main():
     hm = cfg.get("homematic") or {}
     if hm.get("enabled") is False:
         print("HomeMatic: deaktiviert")
+        return 0
+    if hm.get("paused"):
+        print("HomeMatic: pausiert")
         return 0
 
     prev = _previous()
@@ -298,9 +318,11 @@ def main():
         print("HomeMatic FEHLER: {}".format(e))
         return 1
 
-    _write(out)
     if hm.get("notify"):
         _notify_problems(prev, out)
+    elif isinstance(prev.get("battery_state"), dict):
+        out["battery_state"] = prev["battery_state"]
+    _write(out)
     print("HomeMatic: {} Geraete, {} live, {} leer/{} schwach, "
           "{} schlecht/{} maeßig, {} offline".format(
               out["total"], out["live"], out["battery_empty"],

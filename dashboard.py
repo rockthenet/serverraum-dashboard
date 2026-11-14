@@ -536,6 +536,23 @@ def human_uptime(sec):
     return "{}h{}m".format(h, m)
 
 
+def human_uptime_short(sec):
+    """Kompakte Uptime fuer feste Spalten: 239d, 16h, 45m."""
+    try:
+        sec = int(sec)
+    except Exception:
+        return "-"
+    if sec <= 0:
+        return "-"
+    d = sec // 86400
+    if d > 0:
+        return "{}d".format(d)
+    h = (sec % 86400) // 3600
+    if h > 0:
+        return "{}h".format(h)
+    return "{}m".format((sec % 3600) // 60)
+
+
 def human_age(sec):
     """Kompakte Dauer fuer die Statusspalte: 12s, 45m, 5h12, 4d3h."""
     if sec is None:
@@ -590,6 +607,7 @@ def save_config(cfg):
 
 
 NOTIFY_SECTIONS = ("deconz", "homematic", "thread")
+PAUSE_SECTIONS = ("unifi", "deconz", "homematic", "thread")
 
 
 def poller_notify(section):
@@ -620,6 +638,40 @@ def notify_txt(section):
     if poller_notify(section):
         return CLR["gray"] + "Meldung: " + CLR["green"] + "ein" + CLR["gray"] + " [n]"
     return CLR["gray"] + "Meldung: " + CLR["dark"] + "aus" + CLR["gray"] + " [n]"
+
+
+def poller_paused(section):
+    """Ist die Abfrage einer Integration in config.json pausiert?"""
+    sec = CFG.get(section) or {}
+    return bool(sec.get("paused"))
+
+
+def set_poller_paused(section, value):
+    """Abfrage einer Integration pausieren/fortsetzen."""
+    cfg = load(CONFIG)
+    if not isinstance(cfg, dict):
+        return False
+    sec = cfg.get(section)
+    if not isinstance(sec, dict):
+        sec = {}
+        cfg[section] = sec
+    if value:
+        sec["paused"] = True
+    else:
+        sec.pop("paused", None)
+    try:
+        save_config(cfg)
+    except Exception:
+        return False
+    return True
+
+
+def pause_txt(section):
+    """Status fuer die Modal-Fusszeile (Pause-Taste je nach Modal)."""
+    key = "[p]" if section == "homematic" else "[Space]/[p]"
+    if poller_paused(section):
+        return CLR["yellow"] + "Pause: AN " + key + CLR["gray"]
+    return CLR["gray"] + "Pause: aus " + key
 
 
 _LOAD_CACHE = {}
@@ -1234,7 +1286,8 @@ def build_unifi_modal(modal, mw, max_rows=None):
             lines.append(mline(CLR["dark"] + "+{} weitere Geraete".format(hidden) + RST))
 
     lines.append(msep())
-    lines.append(mline(CLR["gray"] + "[ESC] oder [q] schliessen" + RST))
+    lines.append(mline(CLR["gray"] + "[ESC] oder [q] schliessen   "
+                       + pause_txt("unifi") + RST))
     lines.append(mbg + MBOX["bl"] + MBOX["h"] * (mw - 2) + MBOX["br"] + RST)
     return lines
 
@@ -1373,33 +1426,31 @@ def render(w, h, state, prox, speed, uni, dc, frame, active_panel,
     LW = int(w * 0.58)
     RW = w - LW - 3
 
-    # Aktives Panel optisch hervorheben
+    # Aktives Panel optisch hervorheben (oben Proxmox, unten Drahtlos)
     if active_panel == 0:
         l_hdr = " GERAETE [AKTIV] "
         r_hdr = " PROXMOX CLUSTER "
         l_border = CLR["cyan"] + BOLD
         r_border = CLR["dark"]
+        w_border = CLR["dark"]
     elif active_panel == 1:
         l_hdr = " GERAETE "
         r_hdr = " PROXMOX CLUSTER [AKTIV] "
         l_border = CLR["dark"]
         r_border = CLR["cyan"] + BOLD
-    elif active_panel in (2, 3):
+        w_border = CLR["dark"]
+    else:
         l_hdr = " GERAETE "
-        r_hdr = " PROXMOX + UNIFI [AKTIV] "
+        r_hdr = " PROXMOX CLUSTER "
         l_border = CLR["dark"]
-        r_border = CLR["cyan"] + BOLD
-    elif active_panel == 4:
-        l_hdr = " GERAETE "
-        r_hdr = " HOMEMATIC [AKTIV] "
-        l_border = CLR["dark"]
-        r_border = CLR["cyan"] + BOLD
+        r_border = CLR["dark"]
+        w_border = CLR["cyan"] + BOLD
 
     # Header-Linie (auf schmalen Terminals kuerzen)
     if vlen(r_hdr) > RW - 2:
-        r_hdr = r_hdr.replace(" + UNIFI", "").replace(" + HM", "").replace(" CLUSTER", "")
+        r_hdr = " PROXMOX "
     if vlen(r_hdr) > RW - 2:
-        r_hdr = " ".join(r_hdr.split()[:2]) + " "
+        r_hdr = " PVE "
     if vlen(l_hdr) > LW - 2:
         l_hdr = " GERAETE "
     l_bar = BOX["h"] * 2 + l_hdr + BOX["h"] * max(0, LW - 2 - len(l_hdr))
@@ -1417,71 +1468,109 @@ def render(w, h, state, prox, speed, uni, dc, frame, active_panel,
     left_lines = build_device_lines(devs, state, LW,
                                     sel_dev if active_panel == 0 else -1,
                                     dev_hits)
+
+    # Obere rechte Box: Proxmox. Untere rechte Box: alle drahtlosen Dienste.
     prox_hits = []
-    prox_lines = build_proxmox_lines(
+    prox_all = build_proxmox_lines(
         prox, RW,
         sel_guest if (active_panel == 1 and sel_kind == "guest") else -1,
         prox_hits,
         sel_node if (active_panel == 1 and sel_kind == "node") else -1,
         sel_kind if active_panel == 1 else "guest")
-    right_lines = list(prox_lines)
-    rest = max(0, body_h - len(right_lines))
+
+    has_wireless = bool(uni or dc or hm or th)
+    wire_need = 0
+    if has_wireless:
+        if uni:
+            n_ap = len((uni or {}).get("aps") or [])
+            wire_need += 1 + min(max(1, n_ap), 4)
+            if not uni.get("ok"):
+                wire_need += 1
+        if dc:
+            wire_need += 3
+        if hm:
+            wire_need += 3
+        if th:
+            wire_need += 3
+    top_h = body_h if not has_wireless else max(3, body_h - 1 - wire_need)
+    if len(prox_all) > top_h:
+        prox_lines = prox_all[:top_h]
+        if prox_lines:
+            prox_lines[-1] = (CLR["dark"] + "  \u2026 weitere Zeilen"
+                              + " " * max(0, RW - 17) + RST)
+        prox_hits = [(r, k, i) for (r, k, i) in prox_hits if r < top_h]
+    else:
+        prox_lines = prox_all
+
+    divider_row = None
+    wire_lines = []
     uni_hits = []
     uni_len = 0
-    if rest > 0:
-        reserve = 0
-        if dc:
-            reserve += 3          # Leerzeile + deCONZ-Block (2 Zeilen)
-        if hm:
-            reserve += 3          # Leerzeile + HomeMatic-Block (2 Zeilen)
-        if th:
-            reserve += 2          # Leerzeile + Thread-Block (1 Zeile)
-        if reserve >= rest:
-            reserve = max(0, rest - 1)
-        uni_max = max(1, rest - reserve) if reserve else rest
-        uni_lines = build_unifi_lines(
-            uni, RW, uni_max,
-            sel_ap if active_panel == 2 else -1, uni_hits)
-        right_lines += uni_lines
-        uni_len = len(uni_lines)
-        rest = max(0, rest - uni_len)
     dc_hits = []
     dc_off = 0
     dc_len = 0
-    if dc and rest > 0:
-        if rest >= 2:
-            right_lines.append("")       # Abstand zum UniFi-Block
-            dc_off = 1
-            rest -= 1
-        dc_lines = build_deconz_lines(dc, RW, rest, active_panel == 3, dc_hits)
-        right_lines += dc_lines
-        dc_len = len(dc_lines)
-        rest = max(0, rest - dc_len)
     hm_hits = []
     hm_off = 0
     hm_len = 0
-    if hm and rest > 0:
-        if rest >= 2:
-            right_lines.append("")       # Abstand zum deCONZ-Block
-            hm_off = 1
-            rest -= 1
-        hm_lines = build_homematic_lines(
-            hm, RW, rest, active_panel == 4, hm_hits)
-        right_lines += hm_lines
-        hm_len = len(hm_lines)
-        rest = max(0, rest - hm_len)
     th_hits = []
     th_off = 0
-    th_len = 0
-    if th and rest > 0:
-        if rest >= 2:
-            right_lines.append("")       # Abstand zum HomeMatic-Block
-            th_off = 1
-            rest -= 1
-        th_lines = build_thread_lines(th, RW, rest, th_hits)
-        right_lines += th_lines
-        th_len = len(th_lines)
-        rest = max(0, rest - th_len)
+
+    if has_wireless and body_h - len(prox_lines) - 1 >= 0:
+        divider_row = len(prox_lines)
+        rest = body_h - len(prox_lines) - 1
+
+        if uni and rest > 0:
+            reserve = 0
+            if dc:
+                reserve += 3
+            if hm:
+                reserve += 3
+            if th:
+                reserve += 3
+            if reserve >= rest:
+                reserve = max(0, rest - 1)
+            uni_max = max(1, rest - reserve) if reserve else rest
+            uni_lines = build_unifi_lines(
+                uni, RW, uni_max,
+                sel_ap if active_panel == 2 else -1, uni_hits)
+            wire_lines += uni_lines
+            uni_len = len(uni_lines)
+            rest = max(0, rest - uni_len)
+
+        if dc and rest > 0:
+            if rest >= 2:
+                wire_lines.append("")       # Abstand zum UniFi-Block
+                dc_off = 1
+                rest -= 1
+            dc_lines = build_deconz_lines(dc, RW, rest,
+                                          active_panel == 3, dc_hits)
+            wire_lines += dc_lines
+            dc_len = len(dc_lines)
+            rest = max(0, rest - dc_len)
+
+        if hm and rest > 0:
+            if rest >= 2:
+                wire_lines.append("")       # Abstand zum deCONZ-Block
+                hm_off = 1
+                rest -= 1
+            hm_lines = build_homematic_lines(
+                hm, RW, rest, active_panel == 4, hm_hits)
+            wire_lines += hm_lines
+            hm_len = len(hm_lines)
+            rest = max(0, rest - hm_len)
+
+        if th and rest > 0:
+            if rest >= 2:
+                wire_lines.append("")       # Abstand zum HomeMatic-Block
+                th_off = 1
+                rest -= 1
+            th_lines = build_thread_lines(
+                th, RW, rest, active_panel == 5, th_hits)
+            wire_lines += th_lines
+            rest = max(0, rest - len(th_lines))
+
+    right_lines = list(prox_lines) + wire_lines
+    wire_base = (len(prox_lines) + 1) if divider_row is not None else len(prox_lines)
 
     # Selektierbare Zeilen als 2D-Layout merken (Pfeilnavigation + Maus)
     nc_dev = 2 if LW >= 70 else 1
@@ -1498,30 +1587,35 @@ def render(w, h, state, prox, speed, uni, dc, frame, active_panel,
         items.append({"panel": 1, "idx": idx, "kind": kind, "row": 3 + r,
                       "col": LW + 2 + RW // 2})
     for off, ai in uni_hits:
-        items.append({"panel": 2, "idx": ai, "row": 3 + len(prox_lines) + off,
+        if wire_base + off < body_h:
+            items.append({"panel": 2, "idx": ai, "row": 3 + wire_base + off,
+                          "col": LW + 2 + RW // 2})
+    dc_rel = uni_len + dc_off + (dc_hits[0] if dc_hits else 0)
+    if dc_hits and wire_base + dc_rel < body_h:
+        items.append({"panel": 3, "idx": 0, "row": 3 + wire_base + dc_rel,
                       "col": LW + 2 + RW // 2})
-    if dc_hits:
-        items.append({"panel": 3, "idx": 0,
-                      "row": 3 + len(prox_lines) + uni_len + dc_off + dc_hits[0],
+    hm_rel = uni_len + dc_off + dc_len + hm_off + (hm_hits[0] if hm_hits else 0)
+    if hm_hits and wire_base + hm_rel < body_h:
+        items.append({"panel": 4, "idx": 0, "row": 3 + wire_base + hm_rel,
                       "col": LW + 2 + RW // 2})
-    if hm_hits:
-        items.append({"panel": 4, "idx": 0,
-                      "row": 3 + len(prox_lines) + uni_len + dc_off + dc_len
-                             + hm_off + hm_hits[0],
+    th_rel = (uni_len + dc_off + dc_len + hm_off + hm_len + th_off
+              + (th_hits[0] if th_hits else 0))
+    if th_hits and wire_base + th_rel < body_h:
+        items.append({"panel": 5, "idx": 0, "row": 3 + wire_base + th_rel,
                       "col": LW + 2 + RW // 2})
 
     global LAST_LAYOUT
     LAST_LAYOUT = {
-        "ap_hits": [(3 + len(prox_lines) + off, ai) for off, ai in uni_hits],
+        "ap_hits": [(3 + wire_base + off, ai) for off, ai in uni_hits
+                    if wire_base + off < body_h],
         "pve_hits": [(3 + r, kind, idx) for r, kind, idx in prox_hits
                      if r < body_h],
-        "dc_hit": ((3 + len(prox_lines) + uni_len + dc_off + dc_hits[0])
-                   if dc_hits else None),
-        "hm_hit": ((3 + len(prox_lines) + uni_len + dc_off + dc_len
-                    + hm_off + hm_hits[0]) if hm_hits else None),
-        "th_hit": ((3 + len(prox_lines) + uni_len + dc_off + dc_len
-                    + hm_off + hm_len + th_off + th_hits[0])
-                   if th_hits else None),
+        "dc_hit": ((3 + wire_base + dc_rel)
+                   if dc_hits and wire_base + dc_rel < body_h else None),
+        "hm_hit": ((3 + wire_base + hm_rel)
+                   if hm_hits and wire_base + hm_rel < body_h else None),
+        "th_hit": ((3 + wire_base + th_rel)
+                   if th_hits and wire_base + th_rel < body_h else None),
         "items": items,
         "dev_hits": [(3 + r, 1 + ci * (cw_dev + 1),
                       1 + ci * (cw_dev + 1) + cw_dev - 1, di)
@@ -1533,10 +1627,19 @@ def render(w, h, state, prox, speed, uni, dc, frame, active_panel,
 
     for i in range(body_h):
         lc_cell = left_lines[i] if i < len(left_lines) else ""
-        rc_cell = right_lines[i] if i < len(right_lines) else ""
+        if divider_row is not None and i == divider_row:
+            dh = " DRAHTLOS "
+            rc_cell = (BOX["h"] * 2 + w_border + dh + RST
+                       + w_border
+                       + BOX["h"] * max(0, RW - 2 - len(dh)) + RST)
+            mid, rgt = BOX["lt"], BOX["rt"]
+        else:
+            wi = i if divider_row is None or i < divider_row else i - 1
+            rc_cell = right_lines[wi] if 0 <= wi < len(right_lines) else ""
+            mid, rgt = BOX["v"], BOX["v"]
         row = (CLR["cyan"] + BOX["v"] + RST + padto(lc_cell, LW)
-               + CLR["cyan"] + BOX["v"] + RST + padto(rc_cell, RW)
-               + CLR["cyan"] + BOX["v"] + RST)
+               + CLR["cyan"] + mid + RST + padto(rc_cell, RW)
+               + CLR["cyan"] + rgt + RST)
         rows.append(row)
 
     # ─── untere Trennlinie ───
@@ -1554,13 +1657,16 @@ def render(w, h, state, prox, speed, uni, dc, frame, active_panel,
                 "d=Loeschen  f=FritzBox  c=Config  r=Ping  q=Ende")
     elif active_panel == 2:
         foot = (" Tab=Geraete  \u2191\u2193=AP waehlen  Enter=Geraete am AP  "
-                "f=FritzBox  c=Config  q=Ende")
+                "Space=Pause  t=Thread  f=FritzBox  c=Config  q=Ende")
     elif active_panel == 3:
         foot = (" Tab=Geraete  \u2191\u2193\u2190\u2192=frei wechseln  Enter=deCONZ-Details  "
-                "m=HomeMatic  f=FritzBox  c=Config  q=Ende")
+                "m=HomeMatic  t=Thread  f=FritzBox  c=Config  q=Ende")
     elif active_panel == 4:
         foot = (" Tab=Geraete  \u2191\u2193\u2190\u2192=frei wechseln  Enter=HomeMatic-Details  "
-                "f=FritzBox  c=Config  q=Ende")
+                "t=Thread  f=FritzBox  c=Config  q=Ende")
+    elif active_panel == 5:
+        foot = (" Tab=Geraete  \u2191\u2193\u2190\u2192=frei wechseln  Enter=Thread-Details  "
+                "m=HomeMatic  f=FritzBox  c=Config  q=Ende")
     else:
         foot = " Tab=Geraete/UniFi  \u2191\u2193=Waehlen  Enter=Node/Gast-Modal  f=FritzBox  s=Start  x=Stop  p=Refresh  c=Config  q=Ende"
     rows.append(CLR["footbg"] + padto(foot, w) + RST)
@@ -1741,7 +1847,7 @@ def build_proxmox_lines(prox, w, sel_guest, hit_rows=None,
         cpu = nd.get("cpu", 0)
         memf = nd.get("mem", 0) / max(nd.get("maxmem", 1), 1)
         dskf = nd.get("disk", 0) / max(nd.get("maxdisk", 1), 1)
-        up = human_uptime(nd.get("uptime", 0))
+        up = human_uptime_short(nd.get("uptime", 0))
         head = "{}\u2b24 {}{}  {}up {}".format(CLR["green"], BOLD, label, RST, up)
         if node_sel:
             head = hl(head, w)
@@ -1769,23 +1875,26 @@ def build_proxmox_lines(prox, w, sel_guest, hit_rows=None,
             typ = (CLR["blue"] if g["type"] == "VM" else CLR["cyan"]) + g["type"] + RST
             name = g["name"]
             sel = (sel_kind == "guest" and gi == sel_guest)
+            prefix = "  {} {} ".format(sdot, typ)
+            prefix_w = 2 + 1 + 1 + len(g["type"]) + 1
             if running:
                 memtxt = "{}/{}".format(human_bytes(g["mem"]), human_bytes(g["maxmem"]))
                 membar = bar(memf, 6, CLR["green"] if memf < 0.85 else CLR["orange"])
-                up = human_uptime(g.get("uptime", 0))
-                # Uptime direkt hinter dem Namen, RAM rechtsbuendig
-                head = "  {} {} {}{}".format(sdot, typ, name,
-                                             CLR["gray"] + "  up " + up + RST)
-                tail = " {} {}".format(membar, memtxt)
-                if vlen(head) + vlen(tail) > w:
-                    tail = " {} {}".format(
+                up = human_uptime_short(g.get("uptime", 0)).rjust(5)
+                tail = "{} {}".format(membar, memtxt)
+                # Feste Spalten: Name linksbuendig, Uptime 5 Zeichen, RAM rechts.
+                name_w = max(8, w - prefix_w - 1 - 5 - 1 - vlen(tail))
+                line = (prefix + padto(clip(name, name_w), name_w) + " "
+                        + CLR["gray"] + up + RST + " " + tail)
+                if vlen(line) > w:
+                    tail = "{} {}".format(
                         bar(memf, 4, CLR["green"] if memf < 0.85 else CLR["orange"]),
                         memtxt)
+                    name_w = max(8, w - prefix_w - 1 - 5 - 1 - vlen(tail))
+                    line = (prefix + padto(clip(name, name_w), name_w) + " "
+                            + CLR["gray"] + up + RST + " " + tail)
             else:
-                head = "  {} {} {}{}".format(sdot, typ, name,
-                                             CLR["dark"] + "  stopped" + RST)
-                tail = ""
-            line = head + " " * max(0, w - vlen(head) - vlen(tail)) + tail
+                line = (prefix + name + CLR["dark"] + "  stopped" + RST)
             if vlen(line) > w:
                 line = clip(line, w)
             if sel:
@@ -1901,6 +2010,8 @@ def build_unifi_lines(uni, w, max_lines, sel_ap=-1, hit_rows=None):
         hc, BOLD, hc, RST, ap_up, ap_total, wlan)
     if wired:
         head += CLR["dark"] + " \u00b7 {} LAN".format(wired) + RST
+    if poller_paused("unifi"):
+        head += CLR["yellow"] + " \u23f8 PAUSE" + RST
     out.append(head)
     if max_lines is not None and len(out) >= max_lines:
         return out
@@ -2003,6 +2114,8 @@ def build_deconz_lines(dc, w, max_lines, sel=False, hit_rows=None):
             if vlen(cand) + 2 <= w:
                 text = cand
                 break
+        if poller_paused("deconz"):
+            text += " \u23f8"
         line1 = "{}\u2b21 {}{}".format(hc, text, RST)
         if sel:
             line1 = hl(line1, w)
@@ -2016,6 +2129,8 @@ def build_deconz_lines(dc, w, max_lines, sel=False, hit_rows=None):
     else:
         line1 = "{}\u2b21 deCONZ {} \u00b7 {} live{}".format(
             hc, total, online, RST)
+    if poller_paused("deconz"):
+        line1 += CLR["yellow"] + " \u23f8 PAUSE" + RST
     if sel:
         line1 = hl(line1, w)
     if hit_rows is not None:
@@ -2046,8 +2161,8 @@ def build_deconz_lines(dc, w, max_lines, sel=False, hit_rows=None):
     return out[:max_lines] if max_lines is not None else out
 
 
-def build_thread_lines(th, w, max_lines, hit_rows=None):
-    """Kompakter Thread-Border-Router-Block (Port + optional ADB-Status)."""
+def build_thread_lines(th, w, max_lines, sel=False, hit_rows=None):
+    """Thread-Border-Router: Netz, Matter-Geraete und Funkziele ohne Antwort."""
     out = []
     if not th:
         if hit_rows is not None:
@@ -2056,28 +2171,24 @@ def build_thread_lines(th, w, max_lines, hit_rows=None):
 
     adb = th.get("adb") or {}
     thread_state = adb.get("thread") or "unknown"
-    host = th.get("host") or "?"
-    port = th.get("port") or 8008
+    name = th.get("name") or "Thread-BR"
+    unreachable = th.get("unreachable") or []
+    matter = int(th.get("matter_count") or 0)
 
     if not th.get("ok"):
         age = human_age(time.time() - (th.get("ts") or 0))
-        long_line = ("{}\u2301 Thread-BR {}:{} offline{}".format(
-            CLR["red"], host, port, RST))
-        long_age = (long_line + CLR["dark"] + " (vor {})".format(age) + RST)
-        medium_line = "{}\u2301 Thread {}:{} offline{}".format(
-            CLR["red"], host, port, RST)
-        short_line = "{}\u2301 T{} offline{}".format(CLR["red"], port, RST)
-        for line in (long_age, long_line, medium_line, short_line):
-            if vlen(line) <= w:
-                break
+        line1 = "{}\u2301 Thread-BR offline{}".format(CLR["red"], RST)
+        line2 = ("  " + CLR["dark"] + "letzte Daten vor {}".format(age) + RST)
         if hit_rows is not None:
             hit_rows.append(0)
-        return [clip(line, w) if vlen(line) > w else line]
+        return [clip(line1, w), clip(line2, w)][:max_lines]
 
-    if thread_state == "active":
-        tc, label = CLR["green"], "BR aktiv"
-    elif thread_state == "inactive":
+    if thread_state == "inactive":
         tc, label = CLR["red"], "BR INAKTIV"
+    elif unreachable:
+        tc, label = CLR["yellow"], "Funkproblem"
+    elif thread_state == "active":
+        tc, label = CLR["green"], "BR aktiv"
     elif adb.get("state") == "unauthorized":
         tc, label = CLR["yellow"], "ADB bestaetigen"
     elif adb.get("state") == "missing":
@@ -2087,24 +2198,49 @@ def build_thread_lines(th, w, max_lines, hit_rows=None):
     else:
         tc, label = CLR["yellow"], "nur Port"
 
-    up = th.get("uptime")
-    up_txt = " \u00b7 up {}".format(human_age(up)) if up else ""
-    long_line = "{}\u2301 {}{}Thread-BR{} {}:{} ok{} \u00b7 {}{}{}".format(
-        CLR["green"], BOLD, CLR["green"], RST, host, port, RST,
-        tc, label, RST)
-    long_up = long_line + CLR["dark"] + up_txt + RST if up_txt else long_line
-    medium_line = "{}\u2301 Thread {}:{} \u00b7 {}{}{}".format(
-        CLR["green"], host, port, tc, label, RST)
-    short_line = "{}\u2301 T{} \u00b7 {}{}{}".format(
-        CLR["green"], port, tc, label, RST)
-    for line in (long_up, long_line, medium_line, short_line):
-        if vlen(line) <= w:
+    net = th.get("net_name") or "Thread"
+    ch = th.get("channel")
+    if ch:
+        net += " K{}".format(ch)
+    pause = ""
+    if poller_paused("thread"):
+        pause = CLR["yellow"] + " \u23f8" + RST
+
+    variants = [
+        "{}\u2301 {}{}{}  \u00b7  {}  \u00b7  {}{}{}".format(
+            CLR["green"], BOLD, name, RST, net, tc, label, RST) + pause,
+        "{}\u2301 {}  \u00b7  {}{}{}".format(
+            CLR["green"], clip(name, 18), tc, label, RST) + pause,
+        "{}\u2301 Thread  \u00b7  {}{}{}".format(
+            CLR["green"], tc, label, RST) + pause,
+    ]
+    line1 = variants[-1]
+    for cand in variants:
+        if vlen(cand) <= w:
+            line1 = cand
             break
 
+    parts = []
+    if matter:
+        parts.append("{} Matter".format(matter))
+    if unreachable:
+        parts.append("{} Funkziel(e) ohne Antwort".format(len(unreachable)))
+    elif thread_state == "active":
+        parts.append("alle Ziele antworten")
+    if parts:
+        lc2 = CLR["yellow"] if unreachable else CLR["green"]
+        line2 = "  " + lc2 + " \u00b7 ".join(parts) + RST
+    else:
+        line2 = "  " + CLR["dark"] + "keine Geraetedaten" + RST
+
+    if sel:
+        line1 = hl(line1, w)
     if hit_rows is not None:
         hit_rows.append(0)
-    out.append(clip(line, w) if vlen(line) > w else line)
-    return out[:max_lines] if max_lines is not None else out
+    out.append(clip(line1, w) if vlen(line1) > w else line1)
+    if max_lines is None or len(out) < max_lines:
+        out.append(clip(line2, w) if vlen(line2) > w else line2)
+    return out
 
 
 def open_thread_modal(th):
@@ -2167,6 +2303,25 @@ def build_thread_modal(modal, mw):
         else:
             tt = CLR["yellow"] + "unbekannt" + RST
         lines.append(mline("Thread:  {}".format(tt)))
+        net = th.get("net_name")
+        if net:
+            ch = th.get("channel")
+            lines.append(mline("Netz:    {}{}{}".format(
+                net, "  \u00b7  Kanal {}".format(ch) if ch else "", RST)))
+        matter = int(th.get("matter_count") or 0)
+        unreachable = th.get("unreachable") or []
+        if matter or unreachable:
+            det = []
+            if matter:
+                det.append("{} Matter-Instanzen".format(matter))
+            if unreachable:
+                det.append("{}{} Funkziel(e) ohne Antwort{}".format(
+                    CLR["yellow"], len(unreachable), RST))
+            else:
+                det.append(CLR["green"] + "alle Funkziele antworten" + RST)
+            lines.append(mline("Funk:    " + "  \u00b7  ".join(det)))
+        for addr in unreachable[:4]:
+            lines.append(mline(CLR["dark"] + "  NoAck: " + str(addr) + RST))
         if adb.get("evidence"):
             lines.append(mline(CLR["dark"] + clip(
                 "  " + adb["evidence"], mw - 4) + RST))
@@ -2193,7 +2348,8 @@ def build_thread_modal(modal, mw):
 
     lines.append(msep())
     lines.append(mline(CLR["gray"] + "Stand {}   [ESC]/[q] schliessen   ".format(
-        fmt_ts(th.get("ts"))) + notify_txt("thread") + RST))
+        fmt_ts(th.get("ts"))) + pause_txt("thread") + RST))
+    lines.append(mline(CLR["gray"] + "   " + notify_txt("thread") + RST))
     lines.append(mbg + MBOX["bl"] + MBOX["h"] * (mw - 2) + MBOX["br"] + RST)
     return lines
 
@@ -2247,6 +2403,8 @@ def build_homematic_lines(hm, w, max_lines, sel=False, hit_rows=None):
             if vlen(cand) + 2 <= w:
                 text = cand
                 break
+        if poller_paused("homematic"):
+            text += " \u23f8"
         line1 = "{}\u2302 {}{}".format(hc, text, RST)
         if sel:
             line1 = hl(line1, w)
@@ -2259,6 +2417,8 @@ def build_homematic_lines(hm, w, max_lines, sel=False, hit_rows=None):
             hc, BOLD, hc, RST, total, live)
     else:
         line1 = "{}\u2302 HM {} \u00b7 {} live{}".format(hc, total, live, RST)
+    if poller_paused("homematic"):
+        line1 += CLR["yellow"] + " \u23f8 PAUSE" + RST
     if sel:
         line1 = hl(line1, w)
     if hit_rows is not None:
@@ -2332,6 +2492,7 @@ def build_homematic_modal(modal, mw, max_rows=None):
         lines.append(mline(CLR["gray"] + clip(err, mw - 4) + RST))
         lines.append(msep())
         lines.append(mline(CLR["gray"] + "[ESC]/[q] schliessen   "
+                           + pause_txt("homematic") + "  "
                            + notify_txt("homematic") + RST))
         lines.append(mbg + MBOX["bl"] + MBOX["h"] * (mw - 2) + MBOX["br"] + RST)
         return lines
@@ -2399,7 +2560,8 @@ def build_homematic_modal(modal, mw, max_rows=None):
 
     lines.append(msep())
     lines.append(mline(CLR["gray"] + "Stand {}   [ESC]/[q]   ".format(
-        fmt_ts(hm.get("ts"))) + notify_txt("homematic") + RST))
+        fmt_ts(hm.get("ts"))) + pause_txt("homematic") + "  "
+        + notify_txt("homematic") + RST))
     lines.append(mbg + MBOX["bl"] + MBOX["h"] * (mw - 2) + MBOX["br"] + RST)
 
     if not max_rows:
@@ -2427,7 +2589,8 @@ def build_homematic_modal(modal, mw, max_rows=None):
                    + padto(clip(title, mw - 4), mw - 4) + " " + MBOX["v"] + RST)
         foot[1] = mline(CLR["gray"]
                         + "Stand {}   \u2191\u2193 bl\u00e4ttern  ESC/q  ".format(
-                            fmt_ts(hm.get("ts"))) + notify_txt("homematic") + RST)
+                            fmt_ts(hm.get("ts"))) + pause_txt("homematic")
+                        + "  " + notify_txt("homematic") + RST)
 
     return head + content[scroll:scroll + body_h] + foot
 
@@ -2591,7 +2754,8 @@ def build_deconz_modal(modal, mw, max_rows=None):
 
     lines.append(msep())
     lines.append(mline(CLR["gray"] + "[ESC]/[q] schliessen   "
-                       + notify_txt("deconz") + RST))
+                       + pause_txt("deconz") + RST))
+    lines.append(mline(CLR["gray"] + "   " + notify_txt("deconz") + RST))
     lines.append(mbg + MBOX["bl"] + MBOX["h"] * (mw - 2) + MBOX["br"] + RST)
     return lines
 
@@ -2743,7 +2907,7 @@ def _selection(panel, sel_dev, sel_guest, sel_ap, sel_dc, sel_node=0,
                sel_kind="guest"):
     if panel == 1:
         return (sel_node if sel_kind == "node" else sel_guest), sel_kind
-    return {0: sel_dev, 2: sel_ap, 3: sel_dc}.get(panel, 0), None
+    return {0: sel_dev, 2: sel_ap, 3: sel_dc, 5: 0}.get(panel, 0), None
 
 
 def spatial_target(panel, sel_dev, sel_guest, sel_ap, sel_dc, key,
@@ -2801,7 +2965,7 @@ def spatial_target(panel, sel_dev, sel_guest, sel_ap, sel_dc, key,
 
 def handle_input(data, active_panel, sel_dev, sel_guest, sel_ap, sel_dc,
                  num_devs, num_guests, num_aps, num_dc, modal,
-                 sel_node=0, sel_kind="guest", num_hm=0):
+                 sel_node=0, sel_kind="guest", num_hm=0, num_th=0):
     """
     Parst beliebige Terminal-Sequenzen vollstaendig und nicht-blockierend.
     Returns: dict mit 'quit', 'active_panel', 'sel_dev', 'sel_guest',
@@ -2980,6 +3144,8 @@ def handle_input(data, active_panel, sel_dev, sel_guest, sel_ap, sel_dc,
                 order.append(3)
             if num_hm:
                 order.append(4)
+            if num_th:
+                order.append(5)
             if res["active_panel"] in order:
                 pos = order.index(res["active_panel"])
                 res["active_panel"] = order[(pos + 1) % len(order)]
@@ -3021,12 +3187,19 @@ def handle_input(data, active_panel, sel_dev, sel_guest, sel_ap, sel_dc,
                     res["modal_action"] = "notify"
                 elif b == 0x20:
                     res["modal_action"] = "pause"
+            elif modal["type"] == "unifi":
+                if b == 0x20 or c in ("p", "P"):
+                    res["modal_action"] = "pause_toggle"
             elif modal["type"] in ("deconz", "thread"):
                 if c in ("n", "N"):
                     res["modal_action"] = "notify_toggle"
+                elif b == 0x20 or c in ("p", "P"):
+                    res["modal_action"] = "pause_toggle"
             elif modal["type"] == "homematic":
                 if c in ("n", "N"):
                     res["modal_action"] = "notify_toggle"
+                elif c in ("p", "P"):
+                    res["modal_action"] = "pause_toggle"
                 cur = int(modal.get("scroll") or 0)
                 mx = int(modal.get("max_scroll") or 0)
                 if c in ("j", "J"):
@@ -3454,6 +3627,7 @@ def main():
             ap_items = (uni or {}).get("aps") or []
             has_dc = bool(dc)
             has_hm = bool(hm)
+            has_th = bool(th)
 
             if sel_dev >= len(dev_items):
                 sel_dev = max(0, len(dev_items) - 1)
@@ -3469,6 +3643,8 @@ def main():
             if active_panel == 3 and not has_dc:
                 active_panel = 1
             if active_panel == 4 and not has_hm:
+                active_panel = 1
+            if active_panel == 5 and not has_th:
                 active_panel = 1
 
             # Offenes AP-Modal mit frischen Daten versorgen
@@ -3615,6 +3791,7 @@ def main():
                         if (not hit and th
                                 and LAST_LAYOUT.get("th_hit") == my
                                 and x0 <= mx <= x1):
+                            active_panel = 5
                             modal = open_thread_modal(th)
                 data = MOUSE_RE.sub(b"", data)
                 if not data:
@@ -3623,7 +3800,8 @@ def main():
             inp = handle_input(data, active_panel, sel_dev, sel_guest, sel_ap,
                                sel_dc, len(dev_items), len(guest_items),
                                len(ap_items), 1 if has_dc else 0, modal,
-                               sel_node, sel_kind, 1 if has_hm else 0)
+                               sel_node, sel_kind, 1 if has_hm else 0,
+                               1 if has_th else 0)
 
             if inp["quit"]:
                 break
@@ -3638,7 +3816,9 @@ def main():
 
             # Modal oeffnen
             if inp["open_modal"] and not modal:
-                if active_panel == 4 and hm:
+                if active_panel == 5 and th:
+                    modal = open_thread_modal(th)
+                elif active_panel == 4 and hm:
                     modal = open_homematic_modal(hm)
                 elif active_panel == 3 and dc:
                     modal = open_deconz_modal(dc)
@@ -3740,6 +3920,15 @@ def main():
                         CFG = load(CONFIG) or CFG
                         modal["dev"] = find_device(gid, nm) or modal["dev"]
                         modal["result"] = "Meldung: {}".format(NOTIFY_LABELS[newmode])
+                elif (modal["type"] in PAUSE_SECTIONS
+                        and mact == "pause_toggle"):
+                    new = not poller_paused(modal["type"])
+                    if set_poller_paused(modal["type"], new):
+                        CFG = load(CONFIG) or CFG
+                        msg = "{}: Abfrage {}".format(
+                            modal["type"],
+                            "pausiert" if new else "wieder aktiv")
+                        msg_until = time.time() + 3
                 elif (modal["type"] in NOTIFY_SECTIONS
                         and mact == "notify_toggle"):
                     new = not poller_notify(modal["type"])

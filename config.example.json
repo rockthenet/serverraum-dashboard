@@ -7,6 +7,10 @@
   "proxmox_interval_sec": 30,
   "homematic_interval_sec": 60,
   "thread_interval_sec": 60,
+  "web_port": 80,
+  "web_bind": "0.0.0.0",
+  "web_width": 137,
+  "web_height": 38,
   "offline_after": 3,
   "online_after": 2,
   "groups": {
@@ -327,6 +331,7 @@
   ],
   "unifi_interval_sec": 60,
   "unifi": {
+    "paused": false,
     "url": "https://192.168.178.175:8443",
     "username": "admin",
     "password": "DEIN-PASSWORT-HIER",
@@ -336,6 +341,7 @@
   },
   "deconz_interval_sec": 60,
   "deconz": {
+    "paused": false,
     "url": "http://192.168.178.247",
     "apikey": "DEIN-DECONZ-API-KEY",
     "timeout": 6,
@@ -343,6 +349,7 @@
   },
   "homematic": {
     "enabled": true,
+    "paused": false,
     "url": "http://192.168.178.6/addons/xmlapi",
     "timeout": 8,
     "battery_empty_volt": 2.2,
@@ -361,6 +368,7 @@
   },
   "thread": {
     "enabled": true,
+    "paused": false,
     "host": "192.168.178.197",
     "port": 8008,
     "name": "Chromecast 4k",
@@ -368,6 +376,7 @@
     "adb": true,
     "adb_port": 5555,
     "adb_timeout": 6,
+    "matter_timeout": 1.5,
     "adb_commands": [
       "dumpsys thread_network",
       "dumpsys threadnetwork",

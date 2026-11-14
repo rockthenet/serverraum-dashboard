@@ -299,7 +299,10 @@ def _write(data):
 
 
 def _notify_problems(prev, out):
-    """Meldet neu leere/schwache Akkus und Entwarnungen (nur bei Wechsel)."""
+    """Meldet Akku-Probleme mit 24-h-Sperre pro Geraet (kein 5-Minuten-Spam)."""
+    state = prev.get("battery_state")
+    state = dict(state) if isinstance(state, dict) else {}
+    out["battery_state"] = state
     # Ohne vorherigen, vollstaendigen Stand ist das der Basis-Lauf: kein Alarm.
     if not prev.get("ok") or "problems" not in prev:
         return
@@ -309,15 +312,29 @@ def _notify_problems(prev, out):
         return
     pv = prev.get("problems") or {}
     nv = out.get("problems") or {}
+    all_cur = set(nv.get("empty") or []) | set(nv.get("weak") or [])
     for key, label, tags, prio in (
             ("empty", "Akku leer", "battery,warning", "high"),
             ("weak", "Akku schwach", "battery", None)):
         added, gone = ntfy.diff(pv.get(key), nv.get(key))
-        if added:
-            ntfy.send("deCONZ {}: {}".format(label, ntfy.join_names(added)),
+        alerts = []
+        for name in added:
+            due, kind = ntfy.battery_decide(state, name, key, True)
+            if due and kind == "alert":
+                alerts.append(name)
+        recover = []
+        for name in gone:
+            if name in all_cur:
+                continue          # Kategoriewechsel, kein "behoben"
+            due, kind = ntfy.battery_decide(state, name, key, False)
+            if due and kind == "recover":
+                recover.append(name)
+        if alerts:
+            ntfy.send("deCONZ {}: {}".format(label, ntfy.join_names(alerts)),
                       title="deCONZ: {}".format(label), tags=tags, priority=prio)
-        elif gone:
-            ntfy.send("deCONZ {} wieder ok: {}".format(label, ntfy.join_names(gone)),
+        if recover:
+            ntfy.send("deCONZ {} wieder ok: {}".format(
+                label, ntfy.join_names(recover)),
                       title="deCONZ: {} behoben".format(label),
                       tags="battery,white_check_mark")
 
@@ -328,6 +345,10 @@ def main():
             cfg = json.load(f)
     except Exception:
         cfg = {}
+
+    if (cfg.get("deconz") or {}).get("paused"):
+        print("deCONZ: pausiert")
+        return 0
 
     prev = _previous()
 
@@ -355,9 +376,11 @@ def main():
         print("deCONZ FEHLER: {}".format(e))
         return 1
 
-    _write(out)
     if (cfg.get("deconz") or {}).get("notify"):
         _notify_problems(prev, out)
+    elif isinstance(prev.get("battery_state"), dict):
+        out["battery_state"] = prev["battery_state"]
+    _write(out)
     print("deCONZ: {}/{} Geraete verbunden, {} Typen, Akku {}/{}".format(
         out["online"], out["total"], len(out["groups"]),
         out["battery_total"], out["total"]))

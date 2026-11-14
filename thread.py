@@ -19,6 +19,7 @@ import json
 import os
 import re
 import socket
+import struct
 import subprocess
 import time
 import urllib.request
@@ -56,6 +57,8 @@ def _config():
         return None
     th = cfg.get("thread") if isinstance(cfg, dict) else None
     if not isinstance(th, dict) or not th.get("enabled", True):
+        return None
+    if th.get("paused"):
         return None
     return th
 
@@ -232,6 +235,151 @@ def _send(msg, title, tags):
         pass
 
 
+# ─── mDNS / Matter (welche Geraete haengen wirklich am Thread-Netz?) ───
+
+_NOACK_RE = re.compile(
+    r"to:([0-9a-fA-F]{16})\b[^\n]*?error:NoAck")
+
+
+def _dns_encode(name):
+    out = b""
+    for part in name.split("."):
+        if part:
+            out += bytes([len(part)]) + part.encode("utf-8")
+    return out + b"\x00"
+
+
+def _dns_name(data, off):
+    labels = []
+    jumped = False
+    end = off
+    while off < len(data):
+        length = data[off]
+        if length == 0:
+            off += 1
+            break
+        if length & 0xC0 == 0xC0 and off + 1 < len(data):
+            ptr = ((length & 0x3F) << 8) | data[off + 1]
+            if not jumped:
+                end = off + 2
+            jumped = True
+            off = ptr
+            continue
+        labels.append(data[off + 1:off + 1 + length].decode("utf-8", "replace"))
+        off += 1 + length
+    return ".".join(labels), (end if jumped else off)
+
+
+def _dns_records(packet):
+    """Alle Resource Records eines mDNS-Pakets als (name, typ, wert)."""
+    if len(packet) < 12:
+        return []
+    _ident, _flags, qd, an, ns, ar = struct.unpack(">HHHHHH", packet[:12])
+    off = 12
+    for _ in range(qd):
+        _n, off = _dns_name(packet, off)
+        off += 4
+    records = []
+    for _ in range(an + ns + ar):
+        name, off = _dns_name(packet, off)
+        if off + 10 > len(packet):
+            break
+        rtype, _cls, _ttl, rdlen = struct.unpack(">HHIH", packet[off:off + 10])
+        off += 10
+        rdata = packet[off:off + rdlen]
+        value = None
+        if rtype == 12:
+            value, _ = _dns_name(packet, off)
+        elif rtype == 33 and len(rdata) >= 6:
+            _prio, _weight, port = struct.unpack(">HHH", rdata[:6])
+            target, _ = _dns_name(packet, off + 6)
+            value = (target, port)
+        elif rtype == 16:
+            chunks = []
+            pos = 0
+            while pos < len(rdata):
+                ln = rdata[pos]
+                chunks.append(rdata[pos + 1:pos + 1 + ln].decode(
+                    "utf-8", "replace"))
+                pos += 1 + ln
+            value = "|".join(chunks)
+        elif rtype == 1 and len(rdata) == 4:
+            value = socket.inet_ntop(socket.AF_INET, rdata)
+        elif rtype == 28 and len(rdata) == 16:
+            value = socket.inet_ntop(socket.AF_INET6, rdata)
+        records.append((name, rtype, value))
+        off += rdlen
+    return records
+
+
+def _mdns(name, qtype, timeout):
+    packet = (struct.pack(">HHHHHH", 0, 0, 1, 0, 0, 0)
+              + _dns_encode(name) + struct.pack(">HH", qtype, 1))
+    sock = socket.socket(socket.AF_INET, socket.SOCK_DGRAM,
+                         socket.IPPROTO_UDP)
+    records = []
+    try:
+        sock.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
+        sock.setsockopt(socket.IPPROTO_IP, socket.IP_MULTICAST_TTL, 2)
+        sock.settimeout(0.3)
+        sock.sendto(packet, ("224.0.0.251", 5353))
+        end = time.time() + timeout
+        while time.time() < end:
+            try:
+                data, _addr = sock.recvfrom(9000)
+            except socket.timeout:
+                continue
+            except Exception:
+                break
+            records.extend(_dns_records(data))
+    except Exception:
+        pass
+    finally:
+        try:
+            sock.close()
+        except Exception:
+            pass
+    return records
+
+
+def matter_scan(timeout=1.5):
+    """Zaehlt Matter-Instanzen und deren Thread-IPv6-Adressen per mDNS."""
+    base = "_matter._tcp.local"
+    records = _mdns(base, 12, timeout)
+    instances = sorted({val for name, typ, val in records
+                        if typ == 12 and val and val.endswith(base)})
+    thread_hosts = set()
+    for inst in instances:
+        sub = _mdns(inst, 255, min(0.6, timeout))
+        hosts = [val[0] for name, typ, val in sub
+                 if typ == 33 and name == inst and val]
+        for host in hosts:
+            for name, typ, val in _mdns(host, 28, min(0.4, timeout)):
+                if typ == 28 and name == host and val and val.startswith("fd"):
+                    thread_hosts.add(val)
+    return {
+        "matter_count": len(instances),
+        "thread_count": len(thread_hosts),
+        "thread_hosts": sorted(thread_hosts),
+    }
+
+
+def noack_targets(host, adb_port, timeout):
+    """Funkziele, die laut ot-daemon nicht antworten (NoAck)."""
+    serial = "{}:{}".format(host, adb_port)
+    rc, out, err = _run(
+        [ADB, "-s", serial, "shell", "logcat -d -t 1500 -s ot-daemon"],
+        timeout)
+    text = out + err
+    counts = {}
+    for addr in _NOACK_RE.findall(text):
+        counts[addr.lower()] = counts.get(addr.lower(), 0) + 1
+    return ["{} x{}".format(addr, count)
+            for addr, count in sorted(counts.items(),
+                                      key=lambda kv: (-kv[1], kv[0]))
+            if count >= 2]
+
+
 def main():
     th = _config()
     if not th:
@@ -260,6 +408,26 @@ def main():
             adb["evidence"] = evidence
             adb["probes"] = probes
 
+    matter = {"matter_count": 0, "thread_count": 0, "thread_hosts": []}
+    unreachable = []
+    net_name = ""
+    channel = None
+    if ok:
+        matter = matter_scan(float(th.get("matter_timeout") or 2.0))
+        if adb.get("state") == "device":
+            unreachable = noack_targets(
+                host, int(th.get("adb_port") or 5555),
+                float(th.get("adb_timeout") or 6))
+    for probe in adb.get("probes") or []:
+        body = probe.get("out") or ""
+        m = re.search(r"Netz\s+(\S+)", body)
+        if m and not net_name:
+            net_name = m.group(1)
+        m = re.search(r"Kanal\s+(\d+)", body)
+        if m and channel is None:
+            channel = int(m.group(1))
+    degraded = bool(ok and adb.get("thread") == "active" and unreachable)
+
     data = {
         "ok": ok,
         "ts": time.time(),
@@ -269,6 +437,13 @@ def main():
         "rtt_ms": rtt,
         "uptime": info.get("uptime"),
         "connected": info.get("connected"),
+        "net_name": net_name,
+        "channel": channel,
+        "matter_count": matter.get("matter_count", 0),
+        "thread_count": matter.get("thread_count", 0),
+        "thread_hosts": matter.get("thread_hosts") or [],
+        "unreachable": unreachable,
+        "degraded": degraded,
         "adb": adb,
         "error": None if ok else "TCP {}:{} nicht erreichbar".format(host, port),
     }
@@ -279,6 +454,7 @@ def main():
         was_ok = bool(prev.get("ok"))
         old = ((prev.get("adb") or {}).get("thread") or "unknown")
         new = adb["thread"]
+        old_deg = bool(prev.get("degraded"))
         if was_ok and not ok:
             _send("Thread-Border-Router {} ({}) ist nicht erreichbar "
                   "(Port {} zu).".format(name, host, port),
@@ -299,6 +475,15 @@ def main():
                       name, host,
                       " ({})".format(adb["evidence"]) if adb["evidence"] else ""),
                   "Thread-BR aktiv", "white_check_mark")
+        elif ok and new == "active" and not old_deg and degraded:
+            _send("Thread-Border-Router {} ({}): {} Funkziel(e) ohne Antwort "
+                  "(NoAck). Das Netz laeuft, einzelne Geraete sind offline.".format(
+                      name, host, len(unreachable)),
+                  "Thread: Geraet offline", "warning")
+        elif ok and new == "active" and old_deg and not degraded:
+            _send("Thread-Border-Router {} ({}): alle Funkziele antworten "
+                  "wieder.".format(name, host),
+                  "Thread: Geraete wieder da", "white_check_mark")
     return 0
 
 

@@ -10,10 +10,14 @@ Zeigt in einem mehrspaltigen ASCII-Layout:
 - **Internet-Status** inkl. Verbindungsart (LAN/WLAN, IP, SSID) + **maximale
   WAN-Rate (`WAN max`) und aktuelle Auslastung direkt von der FRITZ!Box**
   (Speedtest nur als Fallback)
-- **Proxmox-Panel**: beide PVE-Nodes mit CPU/RAM/Disk-Auslastung und allen
-  VMs/Containern inkl. RAM-Nutzung und Uptime je Gast - Start/Stop direkt aus dem Dashboard;
-  `Enter` auf dem Node-Kopf fährt den **gesamten Server** kontrolliert herunter oder startet ihn neu
-- **UniFi-Block** unter dem Proxmox-Panel: Status und Qualitätswert (`satisfaction`)
+- **Proxmox-Panel** oben rechts: beide PVE-Nodes mit CPU/RAM/Disk-Auslastung
+  und allen VMs/Containern; Gastzeilen mit **festen Spalten** (Name links,
+  Uptime `3d`/`144d` in fester Breite, RAM rechts, bei Tagen ohne Stundenangabe);
+  Start/Stop direkt aus dem Dashboard; `Enter` auf dem Node-Kopf fährt den
+  **gesamten Server** kontrolliert herunter oder startet ihn neu
+- **Box `DRAHTLOS`** unten rechts (eigene Trennzeile, Gesamthöhe unverändert):
+  UniFi-APs, deCONZ, HomeMatic und Thread-Border-Router untereinander
+- **UniFi-Block**: Status und Qualitätswert (`satisfaction`)
   der Access Points; Klick auf einen AP zeigt Qualität pro Funkband, Link, CPU/RAM
   und dessen WLAN-Geräte mehrspaltig im Lightbox-Modal
 - **deCONZ/Phoscon-Block**: Anzahl der **konsolidierten** Zigbee-Geräte (mehrere
@@ -22,24 +26,42 @@ Zeigt in einem mehrspaltigen ASCII-Layout:
 - **HomeMatic-Block**: Geräte der CCU über die XML-API — live, Akku leer/schwach
   und Funkverbindung sehr schlecht/mäßig; Klick bzw. `m` zeigt die Details
   nach Problemgruppe und Gerätetyp
+- **Thread-Border-Router-Block**: Netzname/Kanal, Anzahl Matter-Geräte und
+  Funkziele ohne Antwort (NoAck) — zeigt, ob das Thread-Netz läuft und ob
+  einzelne Geräte trotz aktivem Netz nicht antworten
 - **Freie Pfeilnavigation**: ↑/↓/←/→ springen räumlich zum nächsten Element
-  (Geräte-Subspalten, Proxmox-Guests, APs, deCONZ)
+  (Geräte-Subspalten, Proxmox-Nodes/Guests, APs, deCONZ, HomeMatic, Thread)
+- **Pause für jede Überwachung**: UniFi, deCONZ, HomeMatic und Thread lassen
+  sich im jeweiligen Modal pausieren (Poller setzt aus, Anzeige `⏸ PAUSE`)
+- **Akku-Meldungen max. 1×/Tag pro Gerät**: kein 5-Minuten-Spam bei schwankenden
+  Werten; Entwarnung ebenfalls nur einmal
 - **Verwaltung im TUI**: Geräte anlegen / bearbeiten / pausieren / löschen,
   Intervalle für Ping und Speedtest einstellen, Statusdauer je Gerät
-- **ntfy-Meldungen pro Gerät**: auf Wunsch bei DOWN, UP oder beidem
+- **ntfy-Meldungen pro Gerät und Integration**: auf Wunsch bei DOWN, UP oder beidem
+- **HTTP-Webview** (`web.py`): dieselbe Ansicht read-only im Browser, als eigener
+  Dienst ohne zusätzlichen interaktiven Dashboard-Platz
 - **Uptime**, **CPU-** und **RAM-Auslastung** des Dashboards-Rechners in der Titelzeile
 
 Nur **Python 3 stdlib + `fping`** — kein pip, kein venv, kein Framework.
 
 ```
 ┌──────────────────────────────────────────┬─────────────────────────────────┐
-│ ▸ Proxmox / Virtualisierung [3/4]         │ ⬤ Proxmox 1 (pve)  up 233d21h   │
+│ ▸ Proxmox / Virtualisierung [3/4]         │ ⬤ Proxmox 1 (pve)  up 239d     │
 │  ● Proxmox Backend      0ms               │  CPU ███░░░░ RAM ██████░ DSK ███ │
-│  ○ Zero Pi (Docker)     DOWN              │  ▶ CT ubuntu      ████░░ 1.3/2.0G│
-│ ▸ Netzwerk [5/6]                          │  ▶ VM iobroker2022 ████░ 4.6/6.4G│
+│  ○ Zero Pi (Docker)     DOWN              │  ▶ CT ubuntu         3d ████░ 1.3G│
+│ ▸ Netzwerk [5/6]                          │  ▶ CT docker       239d ██░░░ 1.0G│
 │  ● FRITZ!Box 6590       0ms               │  ■ CT pihole           stopped   │
+│                                           ├── DRAHTLOS ─────────────────────┤
+│                                           │ ⬤ UniFi  2/2 APs · 41 WLAN      │
+│                                           │ ⬡ deCONZ  73 Geraete  64 live   │
+│                                           │ ⌂ HomeMatic  92 Geraete  90 live│
+│                                           │ ⌁ Chromecast 4k · Google-4984   │
 └──────────────────────────────────────────┴─────────────────────────────────┘
 ```
+
+Steuerung der beiden rechten Bereiche: `Tab` schaltet durch **Geräte → Proxmox →
+UniFi → deCONZ → HomeMatic → Thread** und zurück; die Pfeiltasten führen auch
+senkrecht über die `DRAHTLOS`-Trennzeile bis zum Thread-Block.
 
 ## Komponenten
 
@@ -51,7 +73,8 @@ Nur **Python 3 stdlib + `fping`** — kein pip, kein venv, kein Framework.
 | `unifi.py`         | Fragt UniFi-Controller ab (APs, WLAN-Clients) → `unifi.json` |
 | `deconz.py`        | Fragt deCONZ/Phoscon ab (Lights, Sensoren) → `deconz.json`  |
 | `homematic.py`     | Fragt die HomeMatic-CCU über die XML-API ab → `homematic.json` |
-| `thread.py`        | Prüft Thread-Border-Router (Cast-Port, ADB-Status) → `thread.json` |
+| `thread.py`        | Prüft Thread-Border-Router (Cast-Port, ADB-Status, mDNS/NoAck) → `thread.json` |
+| `web.py`           | Read-only-HTTP-Webview derselben Ansicht (stdlib, eigener Dienst) |
 | `fritzbox.py`      | Liest WAN-/Leitungsdaten per TR-064 von der FRITZ!Box → `fritzbox.json` |
 | `speedtest.py`     | Minimaler Down/Up-Speedtest (Fallback) → `speed.json`       |
 | `scheduler.py`     | Sequenzieller Poller: startet Ping/Proxmox/UniFi/deCONZ/HomeMatic/Thread/FRITZ!Box/Speedtest nacheinander |
@@ -65,16 +88,17 @@ Nur **Python 3 stdlib + `fping`** — kein pip, kein venv, kein Framework.
 
 | Taste                | Aktion                                                |
 |----------------------|-------------------------------------------------------|
-| `Tab`                | Panel wechseln (**Geraete** → **Proxmox** → **UniFi** → **deCONZ** → **HomeMatic**) |
-| `↑`/`↓`/`←`/`→`, `j`/`k`/`h`/`l` | **Frei räumlich** zum nächsten Element in der Richtung (Geräte-Subspalten, Proxmox-Nodes/Guests, APs, deCONZ, HomeMatic) |
+| `Tab`                | Panel wechseln (**Geräte** → **Proxmox** → **UniFi** → **deCONZ** → **HomeMatic** → **Thread**) |
+| `↑`/`↓`/`←`/`→`, `j`/`k`/`h`/`l` | **Frei räumlich** zum nächsten Element in der Richtung (Geräte-Subspalten, Proxmox-Nodes/Guests, APs, deCONZ, HomeMatic, Thread) |
 | `Enter`              | **Lightbox-Modal oeffnen** (Aktionen & Details)       |
 | Mausklick            | Auf eine Gerätezeile: **Geräte-Modal** (wie `Enter`); auf eine AP-Zeile: **Geraete dieses APs**; auf den deCONZ-Block: **Typ-/Akku-Übersicht**; auf den HomeMatic-Block: **Akku-/Funk-Details**; auf den Thread-Block: **Border-Router-Details**; auf Node/Gast: **Server-/Gast-Modal**; auf die Statuszeile: **FRITZ!Box-Modal** |
 | `m`                  | **HomeMatic-Modal** (live, Akku leer/schwach, Funk schlecht) |
 | `t`                  | **Thread-Border-Router-Modal** (Port, Uptime, ADB-/Thread-Status) |
 | `a`                  | **Geraet anlegen** (Name, IP/Host, optional HTTP-Port, Gruppe) |
 | `e`                  | Im Geräte-Modal: **Geraet bearbeiten** (Name, IP/Host, HTTP-Port, Gruppe) |
-| `Space`              | **Geraet pausieren / wieder aktivieren** (kein Ping, zaehlt nicht mit) |
-| `d`                  | **Geraet loeschen** (mit Rueckfrage)                  |
+| `Space`              | **Gerät pausieren / wieder aktivieren** (kein Ping, zählt nicht mit); in den Modals von UniFi, deCONZ und Thread: **Abfrage pausieren** |
+| `p`                  | In den Modals von UniFi/deCONZ/Thread (Alternative zu `Space`) und im HomeMatic-Modal: **Abfrage pausieren/fortsetzen** |
+| `d`                  | **Gerät löschen** (mit Rückfrage)                  |
 | `c`                  | **Intervalle + ntfy + Meldungen einstellen** (Ping, Speedtest, Offline/Online ab, ntfy-Kanal/-Token) |
 | `f`                  | **FRITZ!Box-Modal** (Leitung, aktuelle Auslastung, Peak, Traffic) |
 | `n`                  | Im Geräte-Modal: **ntfy-Meldung** umschalten (aus → down → up → beides); im deCONZ-/HomeMatic-/Thread-Modal: **Meldungen ein/aus** |
@@ -118,6 +142,7 @@ Nur **Python 3 stdlib + `fping`** — kein pip, kein venv, kein Framework.
 - **UniFi AP Modal (Klick auf AP oder `Enter`)**:
   Zeigt Qualitaet, Link-Geschwindigkeit, CPU/RAM, pro Funkband Kanal,
   Kanalauslastung und alle WLAN-Geraete des Access Points in mehreren Spalten.
+  - `[Space]` / `[p]` Abfrage der UniFi-Integration **pausieren/fortsetzen**
   - `[q]` / `[ESC]` Schliessen
 
 - **FRITZ!Box Modal (`f` oder Klick auf die Statuszeile)**:
@@ -127,9 +152,24 @@ Nur **Python 3 stdlib + `fping`** — kein pip, kein venv, kein Framework.
   - `[q]` / `[ESC]` Schliessen
 
 - **Thread-Border-Router-Modal (`t` oder Klick auf den Thread-Block)**:
-  Zeigt Adresse/Port, TCP-Status, Uptime und den ADB-/Thread-Zustand inkl. der
-  letzten Probe-Ausgaben (Details siehe unten).
+  Zeigt Adresse/Port, TCP-Status, Uptime, Thread-Zustand, Netzname/Kanal,
+  Matter-Anzahl, Funkziele ohne Antwort (NoAck) und die letzten Probe-Ausgaben.
+  - `[Space]` / `[p]` Thread-Abfrage **pausieren/fortsetzen**
+  - `[n]` Meldungen ein/aus
   - `[q]` / `[ESC]` Schliessen
+
+### Pause fuer einzelne Ueberwachungen
+
+Jede Integration (UniFi, deCONZ, HomeMatic, Thread) laesst sich im eigenen
+Modal pausieren — gedacht fuer Wartung, Umbau oder bewusst abgeschaltete
+Geraete:
+
+- Taste `Space` (ausser HomeMatic) bzw. `p` (ueberall) schaltet um
+- der zustaendige Poller setzt komplett aus, die Anzeige bleibt als letzter
+  Stand stehen und traegt `⏸ PAUSE` (schmal: `⏸`)
+- die Einstellung steht als `paused: true` in `config.json` unter dem jeweiligen
+  Bereich und gilt sofort, ohne Dienst-Neustart
+- Meldungen (ntfy) entfallen waehrend der Pause ebenfalls
 
 ## Geraeteverwaltung (direkt im Dashboard)
 
@@ -155,10 +195,17 @@ Poller eine ntfy-Nachricht, sobald sich etwas aendert:
 |---|---|
 | deCONZ | neuer Akku leer (`warning`/hoch) bzw. schwach; Entwarnung, wenn wieder ok |
 | HomeMatic | neue `LOWBAT`-/≤2,2 V-Batterie bzw. schwach (≤2,5 V); Entwarnung |
-| Thread-BR | Streamer nicht erreichbar (Port zu) bzw. wieder erreichbar; Thread-Netz inaktiv bzw. wieder aktiv |
+| Thread-BR | Streamer nicht erreichbar (Port zu) bzw. wieder erreichbar; Thread-Netz inaktiv bzw. wieder aktiv; neue Funkziele ohne Antwort (NoAck) |
 
 - gemeldet wird **nur bei echten Wechseln** – beim ersten Lauf (oder wenn der
   Poller zuvor nicht erreichbar war) gibt es bewusst keinen Alarm
+- **Akku-Meldungen hoechstens 1× pro Tag und Geraet**: der Poller merkt sich in
+  `battery_state` je Geraet Kategorie (`empty`/`weak`) und Zeitpunkt. Schwankt
+  ein Wert (z. B. 2,4 V ↔ 2,6 V), kommt nicht alle 5 Minuten eine neue
+  Nachricht, sondern hoechstens eine Erinnerung pro 24 h. Ein Wechsel
+  schwach → leer wird sofort einmal gemeldet; die Entwarnung kommt einmal,
+  wenn das Geraet wieder ok ist. Beim ersten vollstaendigen Lauf gibt es
+  keinen Alarm (Basis-Lauf)
 - die Einstellung landet in `config.json` (`deconz.notify`, `homematic.notify`,
   `thread.notify`) und gilt sofort, ohne Dienst-Neustart
 - Standard ist `aus` (bei Thread im Beispiel `ein`), damit nichts ungefragt
@@ -180,10 +227,16 @@ In `config.json` (oder bequem per `c` im Dashboard):
 | `unifi_interval_sec` | 60 | Sekunden zwischen UniFi-Abfragen (APs, WLAN-Clients) |
 | `deconz_interval_sec` | 60 | Sekunden zwischen deCONZ-Abfragen (Lights, Sensoren) |
 | `homematic_interval_sec` | 60 | Sekunden zwischen HomeMatic-CCU-Abfragen (XML-API) |
-| `thread_interval_sec` | 60 | Sekunden zwischen Thread-Border-Router-Checks (Port + ADB) |
+| `thread_interval_sec` | 60 | Sekunden zwischen Thread-Border-Router-Checks (Port + ADB + mDNS/NoAck) |
+| `web_port` / `web_bind` | 80 / `0.0.0.0` | Port und Bind-Adresse der HTTP-Webview |
+| `web_width` / `web_height` | 137 / 38 | virtuelle Terminalgroesse der HTML-Ansicht |
 | `fping_timeout` | 800 | ms pro Host |
 | `offline_after` | 3 | Fehlversuche in Folge, bis „Internet offline“ gilt |
 | `online_after` | 2 | Erfolge in Folge, bis „wieder online“ gilt |
+
+Jede Integration kann zusaetzlich per `paused: true` (UniFi, deCONZ, HomeMatic,
+Thread) stillgelegt werden; das setzt das jeweilige Modal per `Space`/`p`
+(siehe [Pause](#pause-fuer-einzelne-ueberwachungen)).
 
 `checker_loop.sh` ist nur noch eine Hülle um **`scheduler.py`**. Der Scheduler
 liest die Werte vor jedem Job neu — Änderungen greifen sofort, ohne
@@ -345,8 +398,8 @@ Meldungen pro Durchlauf, Rest als Sammelmeldung).
   `CPU`/`RAM` zu `C`/`R`; die Uptime bleibt stehen
 
 Gelesen wird `/proc/uptime`; im Proxmox-Panel steht hinter jedem laufenden
-CT/VM ebenfalls die Uptime (`up 86d5h`), im Detail-Modal zusätzlich
-ausgeschrieben.
+CT/VM ebenfalls die Uptime in einer **festen Spalte** (`3d`, `144d`, `16h` –
+bei Tagen ohne Stundenangabe), im Detail-Modal zusätzlich ausgeschrieben.
 
 ## Zwei Instanzen: Kiosk + eine Shell
 
@@ -368,6 +421,40 @@ physischen Bildschirm (`/dev/tty1`) und **eine** Sitzung über SSH.
 
 Damit bleibt der Bildschirm im Serverraum immer aktuell, ohne dass sich
 mehrere Shell-Sitzungen gegenseitig die CPU wegnehmen.
+
+## HTTP-Webview (Browser-Ansicht)
+
+`web.py` zeigt **dieselbe Dashboard-Ansicht** als HTML im Browser – gedacht als
+zweites, nur lesendes Geraet (Handy, Tablet, PC), ohne einen der beiden
+interaktiven Plaetze zu belegen:
+
+- rendert `dashboard.render()` serverseitig, wandelt ANSI-Farben in HTML um
+- `http://<netbook-ip>/` mit Auto-Refresh alle 10 s; `/healthz` liefert `ok`
+- **keine Eingaben**: Klicks/Tasten gibt es nur in der TUI; die HTML-Seite ist
+  ausschliesslich eine Anzeige
+- laeuft als eigener kleiner systemd-Dienst (`netbook-dashboard-web.service`)
+  mit `CAP_NET_BIND_SERVICE` (Port 80 ohne root); ist Port 80 nicht erlaubt,
+  faellt der Server automatisch auf **8088** aus
+- Groesse und Bind-Adresse stehen in `config.json`:
+
+```json
+"web_port": 80,
+"web_bind": "0.0.0.0",
+"web_width": 137,
+"web_height": 38
+```
+
+Installation:
+
+```bash
+sudo cp web.py /opt/netbook-dashboard/
+sudo cp systemd/netbook-dashboard-web.service /etc/systemd/system/
+sudo systemctl daemon-reload
+sudo systemctl enable --now netbook-dashboard-web.service
+```
+
+Die Seite liest dieselben JSON-Dateien wie die TUI. Faellt ein Poller aus,
+erscheint in der Browser-Ansicht derselbe letzte Stand inkl. Zeitstempel.
 
 ## FRITZ!Box-Block (WAN/Leitung)
 
@@ -421,7 +508,7 @@ Anwendungen*). Ein eingebauter Speedtest ist über TR-064 nicht verfügbar
 
 ## UniFi-Block
 
-Unter dem Proxmox-Panel steht ein kompakter UniFi-Block. Er zeigt **nur die
+Unter der `DRAHTLOS`-Trennzeile steht ein kompakter UniFi-Block. Er zeigt **nur die
 Access Points**; die Geräte erscheinen erst im AP-Modal:
 
 ```
@@ -436,7 +523,7 @@ Access Points**; die Geräte erscheinen erst im AP-Modal:
   rot mit `offline`
 - Qualitaetsfarben: grün ≥ 90, gelb ≥ 75, orange ≥ 60, rot darunter. Ein
   dauerhaft niedriger Wert ist ein Hinweis auf ein Problem am AP (ggf. Neustart)
-- **Klick auf eine AP-Zeile** (oder `Tab` bis `PROXMOX + UNIFI`, dann `↑`/`↓`
+- **Klick auf eine AP-Zeile** (oder `Tab` bis zum UniFi-Panel, dann `↑`/`↓`
   und `Enter`) öffnet das AP-Modal
 - Ist der Controller nicht erreichbar, bleiben die letzten Daten sichtbar und
   der Block zeigt `Controller nicht erreichbar (Daten vor …)`
@@ -509,8 +596,8 @@ Akku-/Funk-Zeile wie HomeMatic:
   gemeldet (deCONZ liefert keinen RSSI/LQI)
 - Farbe: grün = alle verbunden, gelb = einzelne offline, rot = keine Verbindung
 - bei sehr schmalen Terminals rückt alles in eine Zeile (`A0/3 F10`)
-- **Klick auf den Block** (oder `Tab` bis `PROXMOX + UNIFI`, dann `↓` bis
-  deCONZ und `Enter`) öffnet die Detailübersicht
+- **Klick auf den Block** (oder `Tab` bis zum deCONZ-Panel, dann `Enter`)
+  öffnet die Detailübersicht
 - im Modal schaltet `n` die **Akku-Meldungen** ein/aus (siehe
   [Meldungen](#meldungen-fuer-deconz-homematic-und-thread))
 - Ist das Gateway nicht erreichbar, bleiben die letzten Zahlen sichtbar
@@ -584,7 +671,7 @@ HomeMatic-Block. Er fasst die physischen Geräte der CCU zusammen:
 
 - Farbe: grün = keine Auffälligkeit, gelb = mindestens ein Problem
 - **Klick auf den Block** oder Taste `m` öffnet das Detail-Modal; alternativ
-  `Tab` bis `HOMEMATIC [AKTIV]` und `Enter`
+  `Tab` bis zum HomeMatic-Panel und `Enter`
 - im Modal schaltet `n` die **Batterie-Meldungen** ein/aus (siehe
   [Meldungen](#meldungen-fuer-deconz-homematic-und-thread))
 - Reicht der Platz nur für eine Zeile (z. B. 100×30), wird kompakt
@@ -657,38 +744,80 @@ Die Abfrage ist mit ~430 KB nicht ganz klein; der Job läuft deshalb nur alle
 
 ## Thread-Border-Router-Block
 
-Ganz unten im rechten Panel (unter HomeMatic, durch eine Leerzeile abgesetzt)
-steht der Thread-Border-Router – hier der Google-TV-Streamer, der nebenbei ein
-Thread-/Matter-Border-Router ist:
+Ganz unten in der `DRAHTLOS`-Box (unter HomeMatic, durch eine Leerzeile
+abgesetzt) steht der Thread-Border-Router – hier der Google-TV-Streamer, der
+nebenbei ein Thread-/Matter-Border-Router ist:
 
 ```
-⌁ Thread-BR 192.168.178.197:8008 ok · BR aktiv · up 3h12
+⌁ Chromecast 4k  ·  Google-4984 K18  ·  BR aktiv
+  5 Matter · alle Ziele antworten
 ```
 
-Der Block beantwortet zwei getrennte Fragen:
+Die erste Zeile nennt **Name, Netzname + Kanal und den BR-Zustand**, die zweite
+die **Anzahl sichtbarer Matter-Geräte** und ob Funkziele ohne Antwort
+auffallen. Eine IP:Port-Angabe gibt es bewusst nicht mehr – sie sagte nur, dass
+der Streamer läuft, nicht ob das Thread-Netz arbeitet.
+
+Der Block beantwortet drei getrennte Fragen:
 
 1. **Ist der Streamer ueberhaupt an?** → TCP-Connect auf den Cast-Port 8008
-   (plus `/setup/eureka_info` fuer Name und Uptime). Das ist der harte,
-   sekundenschnelle Check. Achtung: 8008 antwortet auch im Standby – „Port
-   offen“ heisst nur „Geraet laeuft“, nicht „Thread-Router laeuft“.
-2. **Laeuft das Thread-Netz noch?** → nur per **ADB** lesbar (siehe unten).
+   (plus `/setup/eureka_info` fuer Name und Uptime). Achtung: 8008 antwortet
+   auch im Standby – „Port offen“ heisst nur „Geraet laeuft“.
+2. **Laeuft das Thread-Netz noch?** → per **ADB** (`dumpsys connectivity`,
+   `dumpsys thread_network`) erkennbar; liefert Netzname, Kanal und `CONNECTED`.
+3. **Antworten die Thread-/Matter-Geraete?** → mDNS-Zaehlung der
+   `_matter._tcp.local`-Instanzen plus NoAck-Spur aus `ot-daemon` (siehe unten).
 
 Farben/Anzeige:
 
 | Fall | Anzeige |
 |------|---------|
-| Port offen, Thread aktiv | gruen, `BR aktiv` |
+| Port offen, Thread aktiv, alle Funkziele ok | gruen, `BR aktiv` + `alle Ziele antworten` |
+| Port offen, Thread aktiv, Ziele ohne Antwort | gelb, `Funkproblem` + `N Funkziel(e) ohne Antwort` |
 | Port offen, Thread nachweislich aus | rot, `BR INAKTIV` |
 | Port offen, ADB wartet auf Freigabe | gelb, `ADB bestaetigen` |
 | Port offen, kein `adb` installiert | gelb, `ADB fehlt` |
 | Port offen, ADB da, aber kein Thread-Status erkennbar | gelb, `Thread unbekannt` |
 | Port offen, ADB abgeschaltet | gelb, `nur Port` |
-| Port zu | rot, `Thread-BR <host>:<port> offline (vor 5m)` |
+| Port zu | rot, `Thread-BR offline` + `letzte Daten vor 5m` |
 
-Bei schmalen Terminals wird gekuerzt (`⌁ Thread <host>:<port> · <Status>`,
-zuletzt `⌁ T8008 · <Status>`). **Klick auf den Block** oder Taste `t` oeffnet
-das Detail-Modal; dort stehen Port/RTT, Uptime, ADB-Zustand, der erkannte
-Thread-Status und die Roh-Ausgaben der ADB-Proben.
+Bei schmalen Terminals wird zuerst der Name, dann der Netzname gekuerzt
+(`⌁ Thread · BR aktiv`). **Klick auf den Block** oder Taste `t` oeffnet das
+Detail-Modal mit Port/RTT, Uptime, ADB-Zustand, Netz/Kanal, Matter-Anzahl,
+NoAck-Adressen und den Roh-Ausgaben der ADB-Proben.
+
+### Messung: Matter-Geraete und NoAck statt IP:Port
+
+Die exakte Child-Table des Thread-Netzes ist auf dem Google-Geraet **nicht
+lesbar**:
+
+- `cmd thread_network ot-ctl ...` scheitert mit
+  `SecurityException: Permission android.permission.THREAD_NETWORK_TESTING is missing`
+- `adb root` ist auf dem Production-Build nicht moeglich, `su` fehlt
+- `dumpsys thread_network` liefert nur den Country-Code
+
+Deshalb misst `thread.py` zwei beobachtbare Signale:
+
+1. **mDNS `_matter._tcp.local`** — zaehlt die annoncierten Matter-Instanzen und
+   loest ueber SRV/AAAA die Thread-IPv6-Adressen (`fd00::…`) auf. Ergebnis:
+   `matter_count`, `thread_count`, `thread_hosts`.
+2. **`logcat -d -s ot-daemon`** — zaehlt `Failed to send … error:NoAck` je
+   Zieladresse. Erst ab **2 Treffern** im Logfenster gilt ein Ziel als
+   auffaellig (`unreachable`), damit einzelne Funkaussetzer nicht sofort
+   `Funkproblem` ausloesen.
+
+### Warum das Pixel „Geraete offline“ meldet, obwohl das Netz laeuft
+
+Genau dieser Fall ist typisch: `dumpsys connectivity` zeigt den Thread-Agent
+`CONNECTED` (Netzname, Kanal, `fd…`-Praefixe), und trotzdem meldet die
+Google-Home-App einzelne Geraete als offline. Das ist **kein BR-Ausfall**,
+sondern ein Geraete-/Funkproblem (Reichweite, Akku, schlafender Sensor). Der
+Block unterscheidet das jetzt sichtbar: `BR aktiv` mit `N Funkziel(e) ohne
+Antwort` heisst „Netz steht, einzelne Geraete antworten nicht“. Ein
+BR-Ausfall waere dagegen `BR INAKTIV` oder `Thread-BR offline`.
+
+Mehr als diese Naeherung ist ohne Root nicht moeglich; die Child-Table bleibt
+auf dem Streamer verborgen.
 
 ### Warum Thread nicht einfach per Port zu pruefen ist
 
@@ -704,9 +833,8 @@ treffen, nie den Thread-Teil:
 | MLE / Thread-Management | UDP 19788 / 61631 | nur innerhalb des Mesh (Funk) |
 
 Auch `eureka_info` liefert nur `uptime`/`connected`, keinen Thread-Status.
-Der einzige Weg an den echten Zustand ist ADB auf dem Streamer.
 
-### ADB (optional, aber der eigentliche BR-Check)
+### ADB (optional, aber der beste BR-Check)
 
 Einmalig am Fernseher **„USB-Debugging zulassen“** bestaetigen, danach merkt
 sich der Streamer den Schluessel. Auf der Zero 2 W:
@@ -729,9 +857,10 @@ Ohne Freigabe steht dort `unauthorized`; das Dashboard zeigt dann gelb
 - globale `fd…`-Adresse am `thread-wpan` → **aktiv**
 - sonst **unbekannt** (dann wird nichts gemeldet)
 
-Bei einem Wechsel von `aktiv` nach `inaktiv` bzw. wenn der Port zufaellt, geht
-eine ntfy-Meldung raus; beim Zurueckschalten kommt eine Entwarnung (kein Alarm
-beim ersten Lauf). Ergebnis liegt in `thread.json`.
+Bei einem Wechsel von `aktiv` nach `inaktiv`, wenn der Port zufaellt oder wenn
+neue NoAck-Ziele auftauchen, geht eine ntfy-Meldung raus; beim Zurueckschalten
+kommt eine Entwarnung (kein Alarm beim ersten Lauf). Ergebnis liegt in
+`thread.json`.
 
 Zugang in `config.json` (Modus 600, **nicht ins Repo**):
 
@@ -739,6 +868,7 @@ Zugang in `config.json` (Modus 600, **nicht ins Repo**):
 "thread_interval_sec": 60,
 "thread": {
   "enabled": true,
+  "paused": false,
   "host": "192.168.178.197",
   "port": 8008,
   "name": "Chromecast 4k",
@@ -746,6 +876,7 @@ Zugang in `config.json` (Modus 600, **nicht ins Repo**):
   "adb": true,
   "adb_port": 5555,
   "adb_timeout": 6,
+  "matter_timeout": 1.5,
   "adb_commands": ["dumpsys thread_network", "dumpsys threadnetwork",
                    "ip -6 addr show dev thread-wpan", "dumpsys connectivity",
                    "getprop | grep -i thread"],
@@ -754,10 +885,12 @@ Zugang in `config.json` (Modus 600, **nicht ins Repo**):
 ```
 
 `"adb": false` schaltet die Proben ab (dann bleibt nur der Port-Check).
-Der Job laeuft im Scheduler alle 60 s; ein `adb connect` kostet nur dann Zeit,
-wenn ADB aktiviert ist. Im Modal schaltet `n` die **Erreichbarkeits-/Thread-
-Meldungen** ein/aus (siehe
-[Meldungen](#meldungen-fuer-deconz-homematic-und-thread)).
+`matter_timeout` begrenzt die mDNS-Suche (Standard 1,5 s). Der Job laeuft im
+Scheduler alle 60 s und braucht auf der Zero 2 W rund 10 s (davon der meiste
+Anteil im ADB-/mDNS-Warten). Im Modal schaltet `n` die
+**Erreichbarkeits-/Thread-Meldungen** ein/aus und `Space`/`p` pausiert die
+Abfrage (siehe [Meldungen](#meldungen-fuer-deconz-homematic-und-thread) und
+[Pause](#pause-fuer-einzelne-ueberwachungen)).
 
 ## Statusdauer
 
@@ -774,13 +907,14 @@ Die Historie bleibt bei einem Dienst-Neustart erhalten (sie wird aus dem alten
 ## Installation
 
 ```bash
-sudo apt install fping
+sudo apt install fping adb          # adb nur fuer den Thread-BR-Check (optional)
 git clone https://github.com/rockthenet/serverraum-dashboard.git
 cd serverraum-dashboard
 sudo mkdir -p /opt/netbook-dashboard
 sudo cp *.py *.sh /opt/netbook-dashboard/
 sudo install -m 755 bin/dashboard /usr/local/bin/dashboard
 cp config.example.json /opt/netbook-dashboard/config.json
+chmod 600 /opt/netbook-dashboard/config.json
 # config.json anpassen: Geräte + Proxmox-Tokens + UniFi-/deCONZ-/FRITZ!Box-Zugang eintragen
 ```
 

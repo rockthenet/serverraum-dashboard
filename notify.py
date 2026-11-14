@@ -3,10 +3,54 @@
 """ntfy-Benachrichtigungen (stdlib-only). Topic aus config.json."""
 import json
 import os
+import time
 import urllib.request
 
 HERE = os.path.dirname(os.path.abspath(__file__))
 CONFIG = os.path.join(HERE, "config.json")
+
+BATTERY_COOLDOWN = 86400
+
+
+def battery_decide(state, name, category, active_seen, now=None):
+    """Akku-Meldung pro Geraet hoechstens einmal pro Tag (24 h).
+
+    ``state`` ist der persistente Zustand (name -> dict) und wird direkt
+    gepflegt. ``category`` ist ``empty`` oder ``weak``, ``active_seen`` sagt,
+    ob das Problem im aktuellen Lauf noch besteht.
+
+    Rueckgabe: (melden, art) mit art ``alert``/``recover``/``None``.
+    """
+    now = time.time() if now is None else now
+    rec = state.get(name)
+    if not isinstance(rec, dict):
+        rec = {}
+
+    if active_seen:
+        cat = rec.get("cat")
+        due = (now - float(rec.get("ts") or 0)) >= BATTERY_COOLDOWN
+        # Verschlechterung (schwach -> leer) einmal sofort melden, sonst
+        # hoechstens eine Erinnerung pro 24 h. Erstfeststellung: ts fehlt.
+        worse = (cat == "weak" and category == "empty")
+        if worse or due:
+            rec.update({"cat": category, "ts": now, "active": True,
+                        "alerted": True})
+            state[name] = rec
+            return True, "alert"
+        rec["cat"] = category
+        rec["active"] = True
+        rec.setdefault("alerted", False)
+        state[name] = rec
+        return False, None
+
+    if rec.get("active"):
+        rec["active"] = False
+        alerted = bool(rec.get("alerted"))
+        rec["alerted"] = False
+        state[name] = rec
+        if alerted:
+            return True, "recover"
+    return False, None
 
 
 def _config():

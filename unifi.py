@@ -297,6 +297,10 @@ def main():
     except Exception:
         cfg = {}
 
+    if (cfg.get("unifi") or {}).get("paused"):
+        print("UniFi: pausiert")
+        return 0
+
     try:
         out = poll(cfg)
     except Exception as e:
